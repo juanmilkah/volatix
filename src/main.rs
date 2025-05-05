@@ -257,7 +257,7 @@ fn parse_request(data: &[u8]) -> Vec<Request> {
 }
 
 fn main() {
-    println!("REDIS RESPONSE PROTOCOL");
+    println!("REDIS SERIALIZATION PROTOCOL");
 }
 
 #[cfg(test)]
