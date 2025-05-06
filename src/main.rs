@@ -132,11 +132,6 @@ fn parse_bstrings(data: &[u8]) -> anyhow::Result<(Option<Vec<u8>>, usize)> {
     Ok((Some(content.to_vec()), i))
 }
 
-enum Recursive {
-    True,
-    False,
-}
-
 // *<number-of-elements>\r\n<element-1>...<element-n>
 //
 // An asterisk (*) as the first byte.
@@ -144,7 +139,7 @@ enum Recursive {
 // the array as an unsigned, base-10 value.
 // The CRLF terminator.
 // An additional RESP type for every element of the array.
-fn parse_array(data: &[u8], recursive: Recursive) -> anyhow::Result<(Option<Vec<Request>>, usize)> {
+fn parse_array(data: &[u8]) -> anyhow::Result<(Option<Vec<Request>>, usize)> {
     let mut i = 0;
     let mut length = Vec::new();
     while i < data.len() && data[i] != b'\r' {
@@ -176,8 +171,7 @@ fn parse_array(data: &[u8], recursive: Recursive) -> anyhow::Result<(Option<Vec<
 
         match elem_type {
             DataType::Arrays => {
-                let (nested_elems, consumed) =
-                    parse_array(&data[i..], Recursive::True).context("nested array")?;
+                let (nested_elems, consumed) = parse_array(&data[i..]).context("nested array")?;
                 elements.push(Request {
                     data_type: DataType::Arrays,
                     content: None,
@@ -256,7 +250,7 @@ fn parse_request(data: &[u8]) -> anyhow::Result<Vec<Request>> {
             })
         }
         DataType::Arrays => {
-            let (elems, _consumed) = parse_array(&data[i..], Recursive::False).context("array")?;
+            let (elems, _consumed) = parse_array(&data[i..]).context("array")?;
             if elems.is_some() {
                 reqs.extend_from_slice(&elems.unwrap());
             } else {
