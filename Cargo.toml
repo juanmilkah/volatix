@@ -1,7 +1,11 @@
 [package]
-name = "resp"
+name = "volatix"
+description = "An in memory database"
+readme = "README.md"
 version = "0.1.0"
 edition = "2024"
+authors = ["Juan Milkah <juanmilkah@gmail.com>"]
+license = "MIT"
 
 [dependencies]
 anyhow = "1.0.98"
