@@ -1,17 +1,18 @@
 /* RESP 2.0*/
 #![feature(int_from_ascii)]
-
+#[allow(dead_code)]
 use anyhow::{Context, anyhow};
 
 #[derive(Debug, Eq, PartialEq, Clone)]
-struct Request {
-    data_type: DataType,
-    content: Option<Vec<u8>>,
-    nested: Option<Vec<Request>>,
+pub struct Request {
+    pub data_type: DataType,
+    pub content: Option<Vec<u8>>,
+    pub nested: Option<Vec<Request>>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Eq, PartialEq, Clone)]
-enum DataType {
+pub enum DataType {
     SimpleString,
     SimpleErrors,
     Integers,
@@ -201,7 +202,7 @@ fn parse_array(data: &[u8]) -> anyhow::Result<(Option<Vec<Request>>, usize)> {
     Ok((Some(elements), i))
 }
 
-fn parse_request(data: &[u8]) -> anyhow::Result<Vec<Request>> {
+pub fn parse_request(data: &[u8]) -> anyhow::Result<Vec<Request>> {
     let mut i = 0;
     if data.is_empty() {
         return Ok(Vec::new());
@@ -266,13 +267,9 @@ fn parse_request(data: &[u8]) -> anyhow::Result<Vec<Request>> {
     Ok(reqs)
 }
 
-fn main() {
-    println!("REDIS SERIALIZATION PROTOCOL");
-}
-
 #[cfg(test)]
 mod tests {
-    use crate::{DataType, Request, parse_request};
+    use super::{DataType, Request, parse_request};
 
     #[test]
     fn t_works() {

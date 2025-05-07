@@ -1,0 +1,16 @@
+[package]
+name = "server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = { workspace = true }
+
+[[bin]]
+name = "server"
+path = "src/main.rs"
+
+[lib]
+name = "server_lib"
+path = "src/lib.rs"
+

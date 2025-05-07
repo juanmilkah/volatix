@@ -7,5 +7,24 @@ edition = "2024"
 authors = ["Juan Milkah <juanmilkah@gmail.com>"]
 license = "MIT"
 
-[dependencies]
+[workspace]
+resolve = "2"
+members = ["server", "cli"]
+
+[workspace.dependencies]
 anyhow = "1.0.98"
+
+[[bin]]
+name = "server"
+path = "server/src/main.rs"
+
+[lib]
+name = "server"
+path = "server/src/lib.rs"
+
+[dependencies]
+anyhow.workspace = true
+
+[[bin]]
+name ="cli"
+path = "cli/src/main.rs"
