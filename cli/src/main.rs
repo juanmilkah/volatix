@@ -5,7 +5,7 @@ use std::net::TcpStream;
 
 use anyhow::Context;
 
-#[derive(Debug, PartialEq)]
+#[derive(PartialEq, Debug, Eq)]
 enum Command {
     Get { key: String },
     Set { key: String, value: String },
@@ -40,7 +40,7 @@ fn parse_line(line: &str) -> Command {
         }
 
         if *pointer >= l {
-            return Err(format!("Missing {}", arg_name));
+            return Err(format!("Missing {arg_name}"));
         }
 
         let delimiter = match chars[*pointer] {
@@ -61,11 +61,11 @@ fn parse_line(line: &str) -> Command {
             if *pointer < l && chars[*pointer] == delim {
                 *pointer += 1;
             } else {
-                return Err(format!("Unclosed quote for {}", arg_name));
+                return Err(format!("Unclosed quote for {arg_name}"));
             }
         } else {
             if *pointer >= l {
-                return Err(format!("Missing {}", arg_name));
+                return Err(format!("Missing {arg_name}"));
             }
 
             while *pointer < l && chars[*pointer].is_whitespace() {
@@ -78,7 +78,7 @@ fn parse_line(line: &str) -> Command {
             }
 
             if arg_chars.is_empty() {
-                return Err(format!("Missing {} after whitespace", arg_name));
+                return Err(format!("Missing {arg_name} after whitespace"));
             }
         }
         Ok(String::from_iter(arg_chars))
@@ -87,25 +87,25 @@ fn parse_line(line: &str) -> Command {
     match cmd_str.to_uppercase().as_str() {
         "GET" => match parse_arg(&mut pointer, "key") {
             Ok(key) => Command::Get { key },
-            Err(e) => Command::ParseError(format!("GET: {}", e)),
+            Err(e) => Command::ParseError(format!("GET: {e}")),
         },
 
         "SET" => match parse_arg(&mut pointer, "key") {
             Ok(key) => match parse_arg(&mut pointer, "value") {
                 Ok(value) => Command::Set { key, value },
-                Err(e) => Command::ParseError(format!("SET: {}", e)),
+                Err(e) => Command::ParseError(format!("SET: {e}")),
             },
-            Err(e) => Command::ParseError(format!("SET: {}", e)),
+            Err(e) => Command::ParseError(format!("SET: {e}")),
         },
 
         "DELETE" => match parse_arg(&mut pointer, "key") {
             Ok(key) => Command::Delete { key },
-            Err(e) => Command::ParseError(format!("DELETE: {}", e)),
+            Err(e) => Command::ParseError(format!("DELETE: {e}")),
         },
 
         "HELP" => Command::Help,
 
-        _ => Command::ParseError(format!("Unknown command: {}", cmd_str)),
+        _ => Command::ParseError(format!("Unknown command: {cmd_str}")),
     }
 }
 
@@ -117,7 +117,7 @@ impl Bstring {
         let mut bstring = String::new();
         let terminator = "\r\n";
 
-        bstring.push_str("$");
+        bstring.push('$');
         bstring.push_str(&s.len().to_string());
         bstring.push_str(terminator);
         bstring.push_str(s);
@@ -135,7 +135,7 @@ impl Array {
         let mut arr = String::new();
         let terminator = "\r\n";
 
-        arr.push_str("*");
+        arr.push('*');
         arr.push_str(&elems.len().to_string());
         arr.push_str(terminator);
 
@@ -156,40 +156,58 @@ fn serialize_request(command: &Command) -> Vec<u8> {
         Command::Get { key } => {
             let mut arr = Vec::new();
             let cmd = Bstring::new("GET");
-            let key = Bstring::new(&key);
+            let key = Bstring::new(key);
 
             arr.push(cmd);
             arr.push(key);
             let arr = Array::new(&arr);
 
-            return arr.0.as_bytes().to_vec();
+            arr.0.as_bytes().to_vec()
         }
         Command::Set { key, value } => {
             let mut arr = Vec::new();
             let cmd = Bstring::new("SET");
-            let key = Bstring::new(&key);
-            let value = Bstring::new(&value);
+            let key = Bstring::new(key);
+            let value = Bstring::new(value);
 
             arr.push(cmd);
             arr.push(key);
             arr.push(value);
             let arr = Array::new(&arr);
 
-            return arr.0.as_bytes().to_vec();
+            arr.0.as_bytes().to_vec()
         }
         Command::Delete { key } => {
             let mut arr = Vec::new();
             let cmd = Bstring::new("DELETE");
-            let key = Bstring::new(&key);
+            let key = Bstring::new(key);
 
             arr.push(cmd);
             arr.push(key);
             let arr = Array::new(&arr);
 
-            return arr.0.as_bytes().to_vec();
+            arr.0.as_bytes().to_vec()
         }
         _ => unreachable!(),
     }
+}
+
+fn deserialize_response(resp: &[u8]) -> anyhow::Result<Vec<String>> {
+    let resp = server_lib::parse_request(resp).context("deserialise response")?;
+    if resp.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    Ok(resp
+        .iter()
+        .map(|r| {
+            r.content
+                .as_ref()
+                .map(|c| String::from_utf8_lossy(c).to_string())
+        })
+        .filter(|r| r.is_some())
+        .flatten()
+        .collect())
 }
 
 fn help() {
@@ -211,7 +229,7 @@ fn main() -> anyhow::Result<()> {
     loop {
         line.clear();
         if let Err(e) = stdin.read_line(&mut line) {
-            eprintln!("ERROR: {}", e);
+            eprintln!("ERROR: {e}");
         }
 
         let line = line.trim();
@@ -220,14 +238,14 @@ fn main() -> anyhow::Result<()> {
             continue;
         }
 
-        let command = parse_line(&line);
+        let command = parse_line(line);
         match command {
             Command::Help => {
                 help();
                 continue;
             }
             Command::ParseError(err) => {
-                eprintln!("ERROR: {}", err);
+                eprintln!("ERROR: {err}");
                 continue;
             }
             _ => {
@@ -240,7 +258,13 @@ fn main() -> anyhow::Result<()> {
         // The server replies with a RESP type.
         // The reply's type is determined by the command's implementation and
         // possibly by the client's protocol version.
-        println!("RECEIVED: {:?}", &buffer[..read]);
+        let resp = deserialize_response(&buffer[..read])?;
+        if resp.is_empty() {
+            let resp = "NULL";
+            println!("{resp}");
+        } else {
+            println!("{resp:?}");
+        }
     }
 }
 

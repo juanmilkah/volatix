@@ -18,13 +18,13 @@ anyhow = "1.0.98"
 name = "server"
 path = "server/src/main.rs"
 
+[[bin]]
+name ="cli"
+path = "cli/src/main.rs"
+
 [lib]
-name = "server"
+name = "server_lib"
 path = "server/src/lib.rs"
 
 [dependencies]
 anyhow.workspace = true
-
-[[bin]]
-name ="cli"
-path = "cli/src/main.rs"

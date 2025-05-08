@@ -3,6 +3,10 @@
 #[allow(dead_code)]
 use anyhow::{Context, anyhow};
 
+mod storage;
+
+pub use storage::Storage;
+
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub struct Request {
     pub data_type: DataType,
@@ -252,8 +256,8 @@ pub fn parse_request(data: &[u8]) -> anyhow::Result<Vec<Request>> {
         }
         DataType::Arrays => {
             let (elems, _consumed) = parse_array(&data[i..]).context("array")?;
-            if elems.is_some() {
-                reqs.extend_from_slice(&elems.unwrap());
+            if let Some(elems) = elems {
+                reqs.extend_from_slice(&elems);
             } else {
                 reqs.push(Request {
                     data_type: DataType::Arrays,
