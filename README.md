@@ -1,6 +1,6 @@
 # Volatix
 
-![Perfomance](performance.png)
+![Performance](performance.png)
 
 An In memory database. Still in development <skill issues :)>
 
