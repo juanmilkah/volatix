@@ -1,6 +1,6 @@
 const ADDRESS: &str = "127.0.0.1:7878";
 
-use std::io::{Read, Write, stdin};
+use std::io::{Read, Write, stdin, stdout};
 use std::net::TcpStream;
 
 use anyhow::Context;
@@ -225,9 +225,12 @@ fn main() -> anyhow::Result<()> {
     let mut line = String::new();
     let mut buffer = [0u8; 1024];
     let mut stream = TcpStream::connect(ADDRESS).context("connect to server")?;
+    let mut stdout = stdout();
 
     loop {
         line.clear();
+        print!("> ");
+        let _ = stdout.flush();
         if let Err(e) = stdin.read_line(&mut line) {
             eprintln!("ERROR: {e}");
         }

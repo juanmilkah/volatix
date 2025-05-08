@@ -1,5 +1,7 @@
 # Volatix
 
+![Perfomance](performance.png)
+
 An In memory database. Still in development <skill issues :)>
 
 ## Build the project
@@ -27,6 +29,13 @@ SET name foo
 GET name
 DELETE name
 HELP
+```
+
+## Benchmarking
+
+```bash
+cargo run --release --bin volatix-bench \
+[--duration<secs>] [--ratio<0-1>] [--threads<1..>]
 ```
 
 This project is licensed under the [MIT](LICENSE).

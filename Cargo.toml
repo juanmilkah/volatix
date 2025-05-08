@@ -9,7 +9,7 @@ license = "MIT"
 
 [workspace]
 resolve = "2"
-members = ["server", "cli"]
+members = ["server", "cli", "volatix-bench"]
 
 [workspace.dependencies]
 anyhow = "1.0.98"
@@ -26,5 +26,12 @@ path = "cli/src/main.rs"
 name = "server_lib"
 path = "server/src/lib.rs"
 
+[[bin]]
+name = "volatix-bench"
+path = "volatix-bench/src/main.rs"
+
 [dependencies]
 anyhow.workspace = true
+parking_lot = "0.12.3"
+rand = "0.9.1"
+

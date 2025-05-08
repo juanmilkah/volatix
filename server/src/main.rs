@@ -122,27 +122,21 @@ fn handle_client(mut stream: TcpStream, storage: Arc<RwLock<Storage>>) {
     loop {
         match stream.read(&mut buffer) {
             Ok(0) => break,
-            Ok(n) => {
-                match parse_request(&buffer[..n]) {
-                    Ok(req) => {
-                        let response = process_request(&req, &storage);
+            Ok(n) => match parse_request(&buffer[..n]) {
+                Ok(req) => {
+                    let response = process_request(&req, &storage);
 
-                        if let Err(e) = stream.write_all(&response) {
-                            eprintln!("ERROR: {e}");
-                        }
-                    }
-                    Err(err) => {
-                        let err = format!("Error parsing request: {err}");
-                        if let Err(e) = stream.write_all(err.as_bytes()) {
-                            eprintln!("ERROR: {e}");
-                        }
+                    if let Err(e) = stream.write_all(&response) {
+                        eprintln!("ERROR: {e}");
                     }
                 }
-
-                if let Err(e) = stream.write_all(b"OK") {
-                    eprintln!("ERROR: {e}");
+                Err(err) => {
+                    let err = format!("Error parsing request: {err}");
+                    if let Err(e) = stream.write_all(err.as_bytes()) {
+                        eprintln!("ERROR: {e}");
+                    }
                 }
-            }
+            },
             Err(e) => eprintln!("ERROR: {e}"),
         }
     }
