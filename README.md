@@ -35,7 +35,11 @@ HELP
 
 ```bash
 cargo run --release --bin volatix-bench \
-[--duration<secs>] [--ratio<0-1>] [--threads<1..>]
+[--duration<secs>] [--ratio<0..1>] [--threads<1..>]
 ```
+Defaults: 
+- 60 secs duration
+- 0.7 mixed-ratio
+- 4 threads
 
 This project is licensed under the [MIT](LICENSE).
