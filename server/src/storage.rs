@@ -3,16 +3,25 @@ use std::{
     time::{Duration, Instant},
 };
 
+// Cons of BTreeMap compared to HashMap
+// Slower lookups: O(log n) time complexity for lookups vs O(1) average case for HashMap.
+// Slower insertions: O(log n) vs O(1) average for HashMap.
+// Slower deletions: O(log n) vs O(1) average for HashMap.
 #[derive(Default)]
 pub struct Storage {
     pub store: HashMap<String, StorageEntry>,
     pub options: StorageOptions,
+    pub stats: StorageStats,
+    pub eviction_policy: EvictionPolicy,
 }
 
 #[derive(Clone)]
 pub struct StorageEntry {
     pub value: String,
-    pub timestamp: Instant,
+    pub created_at: Instant,
+    pub last_accessed: Instant,
+    pub access_count: usize,
+    pub entry_size: usize,
 }
 
 #[derive(Debug)]
@@ -33,10 +42,28 @@ impl StorageOptions {
 impl Default for StorageOptions {
     fn default() -> Self {
         Self {
-            ttl: Duration::from_secs(60 * 60),
+            ttl: Duration::from_secs(60 * 60 * 24), // 24 hrs
             max_capacity: 1000,
         }
     }
+}
+
+#[derive(Default)]
+pub struct StorageStats {
+    pub hits: usize,
+    pub misses: usize,
+    pub evictions: usize,
+    pub expired_removals: usize,
+    // pub avg_lookup_time: Duration,
+}
+
+#[derive(Default, Debug, Clone)]
+pub enum EvictionPolicy {
+    #[default]
+    Oldest, // Oldest created
+    LRU,       // Least recently  accessed
+    LFU,       // Least frequently used
+    SizeAware, // Largest items
 }
 
 impl Storage {
@@ -44,21 +71,37 @@ impl Storage {
         Storage {
             store: HashMap::new(),
             options,
+            stats: StorageStats::default(),
+            eviction_policy: EvictionPolicy::default(),
         }
     }
 
-    pub fn get_key(&self, key: &str) -> Option<StorageEntry> {
-        self.store.get(key).cloned()
+    pub fn get_key(&mut self, key: &str) -> Option<StorageEntry> {
+        if let Some(entry) = self.store.get_mut(key) {
+            self.stats.hits += 1;
+            entry.access_count += 1;
+            entry.last_accessed = Instant::now();
+            return Some(entry.clone());
+        }
+        self.stats.misses += 1;
+        None
     }
 
     pub fn insert_key(&mut self, key: String, value: String) {
         if self.is_full() {
-            self.remove_oldest_key();
+            self.evict_entries();
         }
 
         let timestamp = Instant::now();
-        let value = StorageEntry { value, timestamp };
-        self.store.insert(key, value);
+        let entry_size = value.len();
+        let entry = StorageEntry {
+            value,
+            created_at: timestamp,
+            last_accessed: timestamp,
+            access_count: 0,
+            entry_size,
+        };
+        self.store.insert(key, entry);
         self.remove_expired();
     }
 
@@ -70,26 +113,98 @@ impl Storage {
         self.store.len() >= self.options.max_capacity
     }
 
-    fn remove_oldest_key(&mut self) {
+    fn remove_oldest_entry(&mut self) {
+        let oldest_key = self
+            .store
+            .iter()
+            .min_by(|(_k1, v1), (_k2, v2)| v1.created_at.cmp(&v2.created_at))
+            .map(|(k, _v)| k.clone());
+
+        if let Some(key) = oldest_key {
+            self.remove_key(&key);
+            self.stats.evictions += 1;
+        }
+    }
+
+    fn remove_expired(&mut self) {
+        let prev_count = self.store.keys().count();
+        self.store
+            .retain(|_, value| value.created_at.elapsed() < self.options.ttl);
+        let current_count = self.store.keys().count();
+        let removed = prev_count - current_count;
+        self.stats.expired_removals += removed;
+    }
+
+    pub fn evict_entries(&mut self) {
         self.remove_expired();
         if self.store.len() < self.options.max_capacity {
             return;
         }
 
-        let oldest_key = self
-            .store
-            .iter()
-            .min_by(|(_k1, v1), (_k2, v2)| v1.timestamp.cmp(&v2.timestamp))
-            .map(|(k, _v)| k.clone());
-
-        if let Some(key) = oldest_key {
-            self.remove_key(&key);
+        match self.eviction_policy {
+            EvictionPolicy::Oldest => self.remove_oldest_entry(),
+            EvictionPolicy::LRU => self.remove_lru_entry(),
+            EvictionPolicy::LFU => self.remove_lfu_entry(),
+            EvictionPolicy::SizeAware => self.remove_largest_entry(),
         }
     }
 
-    fn remove_expired(&mut self) {
-        self.store
-            .retain(|_, value| value.timestamp.elapsed() < self.options.ttl);
+    pub fn set_eviction_policy(&mut self, new_policy: &EvictionPolicy) {
+        self.eviction_policy = new_policy.clone();
+    }
+
+    // least recently used/ accessed
+    pub fn remove_lru_entry(&mut self) {
+        let key = self
+            .store
+            .iter()
+            .min_by(|(_, v1), (_, v2)| v1.last_accessed.cmp(&v2.last_accessed))
+            .map(|(k, _)| k.clone());
+
+        if let Some(key) = key {
+            self.store.remove_entry(&key);
+            self.stats.evictions += 1;
+        }
+    }
+
+    // least frequently used/accessed
+    pub fn remove_lfu_entry(&mut self) {
+        let key = self
+            .store
+            .iter()
+            .min_by(|(_, v1), (_, v2)| v1.access_count.cmp(&v2.access_count))
+            .map(|(k, _)| k.clone());
+
+        if let Some(key) = key {
+            self.store.remove_entry(&key);
+            self.stats.evictions += 1;
+        }
+    }
+
+    pub fn remove_largest_entry(&mut self) {
+        let key = self
+            .store
+            .iter()
+            .min_by(|(_, v1), (_, v2)| v1.entry_size.cmp(&v2.entry_size))
+            .map(|(k, _)| k.clone());
+
+        if let Some(key) = key {
+            self.store.remove_entry(&key);
+            self.stats.evictions += 1;
+        }
+    }
+
+    pub fn get_stats(&self) -> StorageStats {
+        StorageStats {
+            hits: self.stats.hits,
+            misses: self.stats.misses,
+            evictions: self.stats.evictions,
+            expired_removals: self.stats.expired_removals,
+        }
+    }
+
+    pub fn reset_stats(&mut self) {
+        self.stats = StorageStats::default();
     }
 }
 
@@ -104,7 +219,7 @@ mod tests {
     fn test_default_options() {
         let storage = Storage::default();
         assert_eq!(storage.store.len(), 0);
-        assert_eq!(storage.options.ttl, Duration::from_secs(60 * 60));
+        assert_eq!(storage.options.ttl, Duration::from_secs(60 * 60 * 24));
         assert_eq!(storage.options.max_capacity, 1000);
     }
 
@@ -282,6 +397,6 @@ mod tests {
 
         assert_eq!(storage.store.len(), 1);
         assert_eq!(updated_entry.value, "updated_value");
-        assert!(updated_entry.timestamp > original_entry.timestamp);
+        assert!(updated_entry.created_at > original_entry.created_at);
     }
 }

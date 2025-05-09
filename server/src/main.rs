@@ -51,7 +51,7 @@ fn get_data(req: &Request) -> Option<String> {
     }
 }
 
-fn process_request(req: &[Request], storage: &Arc<parking_lot::RwLock<Storage>>) -> Vec<u8> {
+fn process_request(req: &[Request], storage: Arc<parking_lot::RwLock<Storage>>) -> Vec<u8> {
     if req.is_empty() {
         // return null array *-1\r\n
         return null_array();
@@ -66,7 +66,7 @@ fn process_request(req: &[Request], storage: &Arc<parking_lot::RwLock<Storage>>)
                             return simple_error("Missing key");
                         }
                         if let Some(key) = get_data(&req[1]) {
-                            let key = storage.read().get_key(&key);
+                            let key = storage.write().get_key(&key);
                             if let Some(key) = key {
                                 return bstring(Some(key.value));
                             }
@@ -122,7 +122,8 @@ fn handle_client(mut stream: TcpStream, storage: Arc<parking_lot::RwLock<Storage
             Ok(0) => break,
             Ok(n) => match parse_request(&buffer[..n]) {
                 Ok(req) => {
-                    let response = process_request(&req, &storage);
+                    let storage = Arc::clone(&storage);
+                    let response = process_request(&req, storage);
 
                     if let Err(e) = stream.write_all(&response) {
                         eprintln!("ERROR: {e}");
