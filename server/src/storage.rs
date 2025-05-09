@@ -87,7 +87,29 @@ impl Storage {
         None
     }
 
-    pub fn insert_key(&mut self, key: String, value: String) {
+    // batch operations
+    pub fn get_entries(&mut self, keys: &[&str]) -> HashMap<String, Option<StorageEntry>> {
+        let mut result = HashMap::with_capacity(keys.len());
+        for key in keys {
+            result.insert(key.to_string(), self.get_key(key));
+        }
+
+        result
+    }
+
+    pub fn insert_entries(&mut self, entries: HashMap<String, String>) {
+        for (key, value) in entries {
+            self.insert_entry(key, value);
+        }
+    }
+
+    pub fn remove_entries(&mut self, keys: &[&str]) {
+        for key in keys {
+            self.remove_entry(key);
+        }
+    }
+
+    pub fn insert_entry(&mut self, key: String, value: String) {
         if self.is_full() {
             self.evict_entries();
         }
@@ -105,7 +127,7 @@ impl Storage {
         self.remove_expired();
     }
 
-    pub fn remove_key(&mut self, key: &str) {
+    pub fn remove_entry(&mut self, key: &str) {
         self.store.remove(key);
     }
 
@@ -121,7 +143,7 @@ impl Storage {
             .map(|(k, _v)| k.clone());
 
         if let Some(key) = oldest_key {
-            self.remove_key(&key);
+            self.remove_entry(&key);
             self.stats.evictions += 1;
         }
     }
@@ -240,7 +262,7 @@ mod tests {
     #[test]
     fn test_insert_and_get_key() {
         let mut storage = Storage::default();
-        storage.insert_key("test_key".to_string(), "test_value".to_string());
+        storage.insert_entry("test_key".to_string(), "test_value".to_string());
 
         let entry = storage.get_key("test_key");
         assert!(entry.is_some());
@@ -249,13 +271,13 @@ mod tests {
 
     // Test removing keys
     #[test]
-    fn test_remove_key() {
+    fn test_remove_entry() {
         let mut storage = Storage::default();
-        storage.insert_key("test_key".to_string(), "test_value".to_string());
+        storage.insert_entry("test_key".to_string(), "test_value".to_string());
 
         assert!(storage.get_key("test_key").is_some());
 
-        storage.remove_key("test_key");
+        storage.remove_entry("test_key");
         assert!(storage.get_key("test_key").is_none());
     }
 
@@ -263,7 +285,7 @@ mod tests {
     #[test]
     fn test_remove_nonexistent_key() {
         let mut storage = Storage::default();
-        storage.remove_key("nonexistent_key");
+        storage.remove_entry("nonexistent_key");
         // Should not panic
     }
 
@@ -274,15 +296,15 @@ mod tests {
         let mut storage = Storage::new(options);
 
         // Insert up to capacity
-        storage.insert_key("key1".to_string(), "value1".to_string());
-        storage.insert_key("key2".to_string(), "value2".to_string());
-        storage.insert_key("key3".to_string(), "value3".to_string());
+        storage.insert_entry("key1".to_string(), "value1".to_string());
+        storage.insert_entry("key2".to_string(), "value2".to_string());
+        storage.insert_entry("key3".to_string(), "value3".to_string());
 
         assert_eq!(storage.store.len(), 3);
         assert!(storage.is_full());
 
         // Insert one more - oldest should be removed
-        storage.insert_key("key4".to_string(), "value4".to_string());
+        storage.insert_entry("key4".to_string(), "value4".to_string());
 
         assert_eq!(storage.store.len(), 3);
         assert!(storage.get_key("key1").is_none());
@@ -297,7 +319,7 @@ mod tests {
         let options = StorageOptions::new(Duration::from_millis(100), 10);
         let mut storage = Storage::new(options);
 
-        storage.insert_key("key1".to_string(), "value1".to_string());
+        storage.insert_entry("key1".to_string(), "value1".to_string());
 
         // Verify key exists
         assert!(storage.get_key("key1").is_some());
@@ -306,7 +328,7 @@ mod tests {
         thread::sleep(Duration::from_millis(150));
 
         // Insert another key to trigger remove_expired()
-        storage.insert_key("key2".to_string(), "value2".to_string());
+        storage.insert_entry("key2".to_string(), "value2".to_string());
 
         // Verify expired key is gone
         assert!(storage.get_key("key1").is_none());
@@ -319,14 +341,14 @@ mod tests {
         let options = StorageOptions::new(Duration::from_millis(100), 10);
         let mut storage = Storage::new(options);
 
-        storage.insert_key("key1".to_string(), "value1".to_string());
-        storage.insert_key("key2".to_string(), "value2".to_string());
+        storage.insert_entry("key1".to_string(), "value1".to_string());
+        storage.insert_entry("key2".to_string(), "value2".to_string());
 
         // Wait for TTL to expire
         thread::sleep(Duration::from_millis(150));
 
         // Insert a new key to trigger remove_expired()
-        storage.insert_key("key3".to_string(), "value3".to_string());
+        storage.insert_entry("key3".to_string(), "value3".to_string());
 
         // Verify both expired keys are gone
         assert!(storage.get_key("key1").is_none());
@@ -341,8 +363,8 @@ mod tests {
         let options = StorageOptions::new(Duration::from_millis(100), 5);
         let mut storage = Storage::new(options);
 
-        storage.insert_key("key1".to_string(), "value1".to_string());
-        storage.insert_key("key2".to_string(), "value2".to_string());
+        storage.insert_entry("key1".to_string(), "value1".to_string());
+        storage.insert_entry("key2".to_string(), "value2".to_string());
 
         assert_eq!(storage.store.len(), 2);
 
@@ -361,17 +383,17 @@ mod tests {
         let options = StorageOptions::new(Duration::from_secs(3600), 3);
         let mut storage = Storage::new(options);
 
-        storage.insert_key("key1".to_string(), "value1".to_string());
+        storage.insert_entry("key1".to_string(), "value1".to_string());
         thread::sleep(Duration::from_millis(10)); // Ensure different timestamps
-        storage.insert_key("key2".to_string(), "value2".to_string());
+        storage.insert_entry("key2".to_string(), "value2".to_string());
         thread::sleep(Duration::from_millis(10));
-        storage.insert_key("key3".to_string(), "value3".to_string());
+        storage.insert_entry("key3".to_string(), "value3".to_string());
 
         assert_eq!(storage.store.len(), 3);
 
         // Insert a new key - should remove the oldest (key1)
         thread::sleep(Duration::from_millis(10));
-        storage.insert_key("key4".to_string(), "value4".to_string());
+        storage.insert_entry("key4".to_string(), "value4".to_string());
 
         assert_eq!(storage.store.len(), 3);
         assert!(storage.get_key("key1").is_none());
@@ -385,14 +407,14 @@ mod tests {
     fn test_update_existing_key() {
         let mut storage = Storage::default();
 
-        storage.insert_key("key1".to_string(), "value1".to_string());
+        storage.insert_entry("key1".to_string(), "value1".to_string());
         let original_entry = storage.get_key("key1").unwrap();
 
         // Wait a moment to ensure timestamp is different
         thread::sleep(Duration::from_millis(10));
 
         // Update the key
-        storage.insert_key("key1".to_string(), "updated_value".to_string());
+        storage.insert_entry("key1".to_string(), "updated_value".to_string());
         let updated_entry = storage.get_key("key1").unwrap();
 
         assert_eq!(storage.store.len(), 1);
