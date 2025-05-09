@@ -1,5 +1,10 @@
 /* RESP 2.0*/
 #![feature(int_from_ascii)]
+use std::{
+    sync::{Arc, mpsc},
+    thread,
+};
+
 #[allow(dead_code)]
 use anyhow::{Context, anyhow};
 
@@ -256,8 +261,8 @@ pub fn parse_request(data: &[u8]) -> anyhow::Result<Vec<Request>> {
         }
         DataType::Arrays => {
             let (elems, _consumed) = parse_array(&data[i..]).context("array")?;
-            if let Some(elems) = elems {
-                reqs.extend_from_slice(&elems);
+            if let Some(ls) = elems {
+                reqs.extend_from_slice(&ls);
             } else {
                 reqs.push(Request {
                     data_type: DataType::Arrays,
@@ -269,6 +274,76 @@ pub fn parse_request(data: &[u8]) -> anyhow::Result<Vec<Request>> {
     };
 
     Ok(reqs)
+}
+
+pub struct ThreadPool {
+    workers: Vec<Worker>,
+    sender: Option<mpsc::Sender<Job>>,
+}
+
+type Job = Box<dyn FnOnce() + Send + 'static>;
+
+struct Worker {
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl Worker {
+    fn new(receiver: Arc<parking_lot::Mutex<mpsc::Receiver<Job>>>) -> Worker {
+        let thread = thread::spawn(move || {
+            loop {
+                let job = receiver.lock().recv();
+                match job {
+                    Ok(job) => job(),
+                    Err(err) => {
+                        eprintln!("ERROR: {err}");
+                        break;
+                    }
+                }
+            }
+        });
+
+        Worker {
+            thread: Some(thread),
+        }
+    }
+}
+
+impl ThreadPool {
+    pub fn new(size: usize) -> Self {
+        assert!(size > 0);
+
+        let (sender, receiver) = mpsc::channel();
+        let receiver = Arc::new(parking_lot::Mutex::new(receiver));
+
+        let mut workers = Vec::with_capacity(size);
+        for _ in 0..size {
+            workers.push(Worker::new(Arc::clone(&receiver)));
+        }
+        ThreadPool {
+            workers,
+            sender: Some(sender),
+        }
+    }
+
+    pub fn execute<F>(&self, f: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        let job = Box::new(f);
+        self.sender.as_ref().unwrap().send(job).unwrap()
+    }
+}
+
+impl Drop for ThreadPool {
+    fn drop(&mut self) {
+        for worker in &mut self.workers {
+            // drop sender first
+            drop(self.sender.take());
+            if let Some(thread) = worker.thread.take() {
+                thread.join().unwrap();
+            }
+        }
+    }
 }
 
 #[cfg(test)]

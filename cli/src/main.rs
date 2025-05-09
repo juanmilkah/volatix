@@ -1,7 +1,5 @@
-const ADDRESS: &str = "127.0.0.1:7878";
-
 use std::io::{Read, Write, stdin, stdout};
-use std::net::TcpStream;
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream};
 
 use anyhow::Context;
 
@@ -223,8 +221,10 @@ fn main() -> anyhow::Result<()> {
 
     let stdin = stdin();
     let mut line = String::new();
-    let mut buffer = [0u8; 1024];
-    let mut stream = TcpStream::connect(ADDRESS).context("connect to server")?;
+    // 1MB
+    let mut buffer = [0u8; 1024 * 1024];
+    let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 7878));
+    let mut stream = TcpStream::connect(addr).context("connect to server")?;
     let mut stdout = stdout();
 
     loop {

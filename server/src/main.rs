@@ -1,11 +1,11 @@
 use std::{
+    env::args,
     io::{Read, Write},
-    net::{TcpListener, TcpStream},
-    sync::{Arc, RwLock},
-    thread,
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream},
+    sync::Arc,
 };
 
-use server_lib::{DataType, Request, Storage, parse_request};
+use server_lib::{DataType, Request, Storage, ThreadPool, parse_request};
 
 fn null_array() -> Vec<u8> {
     b"*-1\r\n".to_vec()
@@ -51,7 +51,7 @@ fn get_data(req: &Request) -> Option<String> {
     }
 }
 
-fn process_request(req: &[Request], storage: &Arc<RwLock<Storage>>) -> Vec<u8> {
+fn process_request(req: &[Request], storage: &Arc<parking_lot::RwLock<Storage>>) -> Vec<u8> {
     if req.is_empty() {
         // return null array *-1\r\n
         return null_array();
@@ -66,7 +66,7 @@ fn process_request(req: &[Request], storage: &Arc<RwLock<Storage>>) -> Vec<u8> {
                             return simple_error("Missing key");
                         }
                         if let Some(key) = get_data(&req[1]) {
-                            let key = storage.read().unwrap().get_key(&key);
+                            let key = storage.read().get_key(&key);
                             return bstring(key);
                         } else {
                             return bstring(None);
@@ -79,13 +79,10 @@ fn process_request(req: &[Request], storage: &Arc<RwLock<Storage>>) -> Vec<u8> {
 
                         match get_data(&req[1]) {
                             Some(key) => match get_data(&req[2]) {
-                                Some(value) => match storage.write() {
-                                    Ok(mut w_guard) => {
-                                        w_guard.insert_key(key, value);
-                                        return bstring(Some("SUCCESS".to_string()));
-                                    }
-                                    Err(e) => return simple_error(&format!("ERROR: {e}")),
-                                },
+                                Some(value) => {
+                                    storage.write().insert_key(key, value);
+                                    return bstring(Some("SUCCESS".to_string()));
+                                }
                                 None => return simple_error("Missing value"),
                             },
                             None => return simple_error("Missing key"),
@@ -97,13 +94,10 @@ fn process_request(req: &[Request], storage: &Arc<RwLock<Storage>>) -> Vec<u8> {
                         }
 
                         match get_data(&req[1]) {
-                            Some(key) => match storage.write() {
-                                Ok(mut w_guard) => {
-                                    w_guard.remove_key(&key);
-                                    return bstring(Some("SUCCESS".to_string()));
-                                }
-                                Err(e) => return simple_error(&format!("ERROR: {e}")),
-                            },
+                            Some(key) => {
+                                storage.write().remove_key(&key);
+                                return bstring(Some("SUCCESS".to_string()));
+                            }
                             None => return simple_error("Missing key"),
                         }
                     }
@@ -116,8 +110,9 @@ fn process_request(req: &[Request], storage: &Arc<RwLock<Storage>>) -> Vec<u8> {
     }
 }
 
-fn handle_client(mut stream: TcpStream, storage: Arc<RwLock<Storage>>) {
-    let mut buffer = [0; 512];
+fn handle_client(mut stream: TcpStream, storage: Arc<parking_lot::RwLock<Storage>>) {
+    // 1MB
+    let mut buffer = [0; 1024 * 1024];
 
     loop {
         match stream.read(&mut buffer) {
@@ -143,17 +138,27 @@ fn handle_client(mut stream: TcpStream, storage: Arc<RwLock<Storage>>) {
 }
 
 fn main() -> anyhow::Result<()> {
-    let addr = "127.0.0.1:7878";
+    let args: Vec<_> = args().collect();
+    let mut thread_count = 4;
+
+    for i in 1..args.len() {
+        if args[i] == "--threads" && i + 1 < args.len() {
+            thread_count = args[i + 1].parse().unwrap_or(4);
+        }
+    }
+
+    let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 7878));
     let listener = TcpListener::bind(addr)?;
     println!("Server listening on {addr}");
 
-    let storage = Arc::new(RwLock::new(Storage::new()));
+    let storage = Arc::new(parking_lot::RwLock::new(Storage::new()));
+    let pool = ThreadPool::new(thread_count); // 4 threads
 
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
                 let storage = Arc::clone(&storage);
-                thread::spawn(move || handle_client(stream, storage));
+                pool.execute(|| handle_client(stream, storage));
             }
             Err(e) => eprintln!("ERROR: {e}"),
         }

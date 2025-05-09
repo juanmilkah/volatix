@@ -29,10 +29,6 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 [[package]]
 name = "cli"
 version = "0.1.0"
-dependencies = [
- "anyhow",
- "server",
-]
 
 [[package]]
 name = "getrandom"
@@ -167,6 +163,7 @@ name = "server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "parking_lot",
 ]
 
 [[package]]
@@ -204,10 +201,6 @@ dependencies = [
 [[package]]
 name = "volatix-bench"
 version = "0.1.0"
-dependencies = [
- "parking_lot",
- "rand",
-]
 
 [[package]]
 name = "wasi"

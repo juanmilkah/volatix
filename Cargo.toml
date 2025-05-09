@@ -13,6 +13,8 @@ members = ["server", "cli", "volatix-bench"]
 
 [workspace.dependencies]
 anyhow = "1.0.98"
+parking_lot = "0.12.3"
+rand = "0.9.1"
 
 [[bin]]
 name = "server"
@@ -32,6 +34,5 @@ path = "volatix-bench/src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
-parking_lot = "0.12.3"
-rand = "0.9.1"
-
+rand.workspace = true
+parking_lot.workspace = true

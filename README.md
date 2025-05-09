@@ -13,7 +13,7 @@ cargo build --release
 ## Start server
 
 ```
-  cargo run --release --bin server
+  cargo run --release --bin server [--threads<1..>]
 ```
 
 ## Start cli repl
