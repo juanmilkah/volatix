@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use server_lib::{DataType, Request, Storage, ThreadPool, parse_request};
+use server_lib::{DataType, Request, Storage, StorageOptions, ThreadPool, parse_request};
 
 fn null_array() -> Vec<u8> {
     b"*-1\r\n".to_vec()
@@ -67,7 +67,10 @@ fn process_request(req: &[Request], storage: &Arc<parking_lot::RwLock<Storage>>)
                         }
                         if let Some(key) = get_data(&req[1]) {
                             let key = storage.read().get_key(&key);
-                            return bstring(key);
+                            if let Some(key) = key {
+                                return bstring(Some(key.value));
+                            }
+                            return bstring(None);
                         } else {
                             return bstring(None);
                         }
@@ -151,7 +154,8 @@ fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(addr)?;
     println!("Server listening on {addr}");
 
-    let storage = Arc::new(parking_lot::RwLock::new(Storage::new()));
+    let options = StorageOptions::default();
+    let storage = Arc::new(parking_lot::RwLock::new(Storage::new(options)));
     let pool = ThreadPool::new(thread_count); // 4 threads
 
     for stream in listener.incoming() {

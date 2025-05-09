@@ -1,26 +1,287 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 #[derive(Default)]
 pub struct Storage {
-    pub store: HashMap<String, String>,
+    pub store: HashMap<String, StorageEntry>,
+    pub options: StorageOptions,
+}
+
+#[derive(Clone)]
+pub struct StorageEntry {
+    pub value: String,
+    pub timestamp: Instant,
+}
+
+#[derive(Debug)]
+pub struct StorageOptions {
+    pub ttl: Duration,
+    pub max_capacity: usize,
+}
+
+impl StorageOptions {
+    pub fn new(ttl: Duration, max_cap: usize) -> Self {
+        Self {
+            ttl,
+            max_capacity: max_cap,
+        }
+    }
+}
+
+impl Default for StorageOptions {
+    fn default() -> Self {
+        Self {
+            ttl: Duration::from_secs(60 * 60),
+            max_capacity: 1000,
+        }
+    }
 }
 
 impl Storage {
-    pub fn new() -> Self {
+    pub fn new(options: StorageOptions) -> Self {
         Storage {
             store: HashMap::new(),
+            options,
         }
     }
 
-    pub fn get_key(&self, key: &str) -> Option<String> {
+    pub fn get_key(&self, key: &str) -> Option<StorageEntry> {
         self.store.get(key).cloned()
     }
 
     pub fn insert_key(&mut self, key: String, value: String) {
+        if self.is_full() {
+            self.remove_oldest_key();
+        }
+
+        let timestamp = Instant::now();
+        let value = StorageEntry { value, timestamp };
         self.store.insert(key, value);
+        self.remove_expired();
     }
 
     pub fn remove_key(&mut self, key: &str) {
         self.store.remove(key);
+    }
+
+    fn is_full(&self) -> bool {
+        self.store.len() >= self.options.max_capacity
+    }
+
+    fn remove_oldest_key(&mut self) {
+        self.remove_expired();
+        if self.store.len() < self.options.max_capacity {
+            return;
+        }
+
+        let oldest_key = self
+            .store
+            .iter()
+            .min_by(|(_k1, v1), (_k2, v2)| v1.timestamp.cmp(&v2.timestamp))
+            .map(|(k, _v)| k.clone());
+
+        if let Some(key) = oldest_key {
+            self.remove_key(&key);
+        }
+    }
+
+    fn remove_expired(&mut self) {
+        self.store
+            .retain(|_, value| value.timestamp.elapsed() < self.options.ttl);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{thread, time::Duration};
+
+    use super::{Storage, StorageOptions};
+
+    // Test default configuration
+    #[test]
+    fn test_default_options() {
+        let storage = Storage::default();
+        assert_eq!(storage.store.len(), 0);
+        assert_eq!(storage.options.ttl, Duration::from_secs(60 * 60));
+        assert_eq!(storage.options.max_capacity, 1000);
+    }
+
+    // Test creating storage with custom options
+    #[test]
+    fn test_custom_options() {
+        let ttl = Duration::from_secs(30);
+        let max_capacity = 50;
+        let options = StorageOptions::new(ttl, max_capacity);
+        let storage = Storage::new(options);
+
+        assert_eq!(storage.options.ttl, Duration::from_secs(30));
+        assert_eq!(storage.options.max_capacity, 50);
+        assert_eq!(storage.store.len(), 0);
+    }
+
+    // Test inserting and retrieving keys
+    #[test]
+    fn test_insert_and_get_key() {
+        let mut storage = Storage::default();
+        storage.insert_key("test_key".to_string(), "test_value".to_string());
+
+        let entry = storage.get_key("test_key");
+        assert!(entry.is_some());
+        assert_eq!(entry.unwrap().value, "test_value");
+    }
+
+    // Test removing keys
+    #[test]
+    fn test_remove_key() {
+        let mut storage = Storage::default();
+        storage.insert_key("test_key".to_string(), "test_value".to_string());
+
+        assert!(storage.get_key("test_key").is_some());
+
+        storage.remove_key("test_key");
+        assert!(storage.get_key("test_key").is_none());
+    }
+
+    // Test removing non-existent key
+    #[test]
+    fn test_remove_nonexistent_key() {
+        let mut storage = Storage::default();
+        storage.remove_key("nonexistent_key");
+        // Should not panic
+    }
+
+    // Test capacity enforcement
+    #[test]
+    fn test_capacity_enforcement() {
+        let options = StorageOptions::new(Duration::from_secs(3600), 3);
+        let mut storage = Storage::new(options);
+
+        // Insert up to capacity
+        storage.insert_key("key1".to_string(), "value1".to_string());
+        storage.insert_key("key2".to_string(), "value2".to_string());
+        storage.insert_key("key3".to_string(), "value3".to_string());
+
+        assert_eq!(storage.store.len(), 3);
+        assert!(storage.is_full());
+
+        // Insert one more - oldest should be removed
+        storage.insert_key("key4".to_string(), "value4".to_string());
+
+        assert_eq!(storage.store.len(), 3);
+        assert!(storage.get_key("key1").is_none());
+        assert!(storage.get_key("key2").is_some());
+        assert!(storage.get_key("key3").is_some());
+        assert!(storage.get_key("key4").is_some());
+    }
+
+    // Test TTL expiration
+    #[test]
+    fn test_ttl_expiration() {
+        let options = StorageOptions::new(Duration::from_millis(100), 10);
+        let mut storage = Storage::new(options);
+
+        storage.insert_key("key1".to_string(), "value1".to_string());
+
+        // Verify key exists
+        assert!(storage.get_key("key1").is_some());
+
+        // Wait for TTL to expire
+        thread::sleep(Duration::from_millis(150));
+
+        // Insert another key to trigger remove_expired()
+        storage.insert_key("key2".to_string(), "value2".to_string());
+
+        // Verify expired key is gone
+        assert!(storage.get_key("key1").is_none());
+        assert!(storage.get_key("key2").is_some());
+    }
+
+    // Test that remove_expired correctly handles multiple expired keys
+    #[test]
+    fn test_multiple_expired_keys() {
+        let options = StorageOptions::new(Duration::from_millis(100), 10);
+        let mut storage = Storage::new(options);
+
+        storage.insert_key("key1".to_string(), "value1".to_string());
+        storage.insert_key("key2".to_string(), "value2".to_string());
+
+        // Wait for TTL to expire
+        thread::sleep(Duration::from_millis(150));
+
+        // Insert a new key to trigger remove_expired()
+        storage.insert_key("key3".to_string(), "value3".to_string());
+
+        // Verify both expired keys are gone
+        assert!(storage.get_key("key1").is_none());
+        assert!(storage.get_key("key2").is_none());
+        assert!(storage.get_key("key3").is_some());
+        assert_eq!(storage.store.len(), 1);
+    }
+
+    // Test the existing remove_expired function directly
+    #[test]
+    fn test_remove_expired_directly() {
+        let options = StorageOptions::new(Duration::from_millis(100), 5);
+        let mut storage = Storage::new(options);
+
+        storage.insert_key("key1".to_string(), "value1".to_string());
+        storage.insert_key("key2".to_string(), "value2".to_string());
+
+        assert_eq!(storage.store.len(), 2);
+
+        // Wait for TTL to expire
+        thread::sleep(Duration::from_millis(150));
+
+        // Call remove_expired directly
+        storage.remove_expired();
+
+        assert_eq!(storage.store.len(), 0);
+    }
+
+    // Test that oldest entries are removed when capacity is reached
+    #[test]
+    fn test_remove_oldest_key() {
+        let options = StorageOptions::new(Duration::from_secs(3600), 3);
+        let mut storage = Storage::new(options);
+
+        storage.insert_key("key1".to_string(), "value1".to_string());
+        thread::sleep(Duration::from_millis(10)); // Ensure different timestamps
+        storage.insert_key("key2".to_string(), "value2".to_string());
+        thread::sleep(Duration::from_millis(10));
+        storage.insert_key("key3".to_string(), "value3".to_string());
+
+        assert_eq!(storage.store.len(), 3);
+
+        // Insert a new key - should remove the oldest (key1)
+        thread::sleep(Duration::from_millis(10));
+        storage.insert_key("key4".to_string(), "value4".to_string());
+
+        assert_eq!(storage.store.len(), 3);
+        assert!(storage.get_key("key1").is_none());
+        assert!(storage.get_key("key2").is_some());
+        assert!(storage.get_key("key3").is_some());
+        assert!(storage.get_key("key4").is_some());
+    }
+
+    // Test updating an existing key
+    #[test]
+    fn test_update_existing_key() {
+        let mut storage = Storage::default();
+
+        storage.insert_key("key1".to_string(), "value1".to_string());
+        let original_entry = storage.get_key("key1").unwrap();
+
+        // Wait a moment to ensure timestamp is different
+        thread::sleep(Duration::from_millis(10));
+
+        // Update the key
+        storage.insert_key("key1".to_string(), "updated_value".to_string());
+        let updated_entry = storage.get_key("key1").unwrap();
+
+        assert_eq!(storage.store.len(), 1);
+        assert_eq!(updated_entry.value, "updated_value");
+        assert!(updated_entry.timestamp > original_entry.timestamp);
     }
 }

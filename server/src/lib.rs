@@ -10,7 +10,7 @@ use anyhow::{Context, anyhow};
 
 mod storage;
 
-pub use storage::Storage;
+pub use storage::*;
 
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub struct Request {
