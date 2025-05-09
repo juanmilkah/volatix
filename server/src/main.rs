@@ -98,7 +98,7 @@ fn process_request(req: &[Request], storage: Arc<parking_lot::RwLock<Storage>>) 
 
                         match get_data(&req[1]) {
                             Some(key) => {
-                                storage.write().remove_key(&key);
+                                storage.write().remove_entry(&key);
                                 return bstring(Some("SUCCESS".to_string()));
                             }
                             None => return simple_error("Missing key"),

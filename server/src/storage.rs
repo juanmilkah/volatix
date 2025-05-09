@@ -22,6 +22,7 @@ pub struct StorageEntry {
     pub last_accessed: Instant,
     pub access_count: usize,
     pub entry_size: usize,
+    pub ttl: Duration,
 }
 
 #[derive(Debug)]
@@ -122,6 +123,7 @@ impl Storage {
             last_accessed: timestamp,
             access_count: 0,
             entry_size,
+            ttl: self.options.ttl,
         };
         self.store.insert(key, entry);
         self.remove_expired();
@@ -129,6 +131,37 @@ impl Storage {
 
     pub fn remove_entry(&mut self, key: &str) {
         self.store.remove(key);
+    }
+
+    pub fn insert_with_ttl(&mut self, key: String, value: String, ttl: Duration) {
+        let entry_size = value.len();
+
+        let entry = StorageEntry {
+            value,
+            created_at: Instant::now(),
+            last_accessed: Instant::now(),
+            access_count: 0,
+            entry_size,
+            ttl,
+        };
+
+        self.store.insert(key, entry);
+        self.remove_expired();
+    }
+
+    pub fn extend_ttl(&mut self, key: &str, additional_time: Duration) {
+        if let Some(entry) = self.store.get_mut(key) {
+            entry.ttl += additional_time;
+            entry.access_count += 1;
+            entry.last_accessed = Instant::now();
+        }
+    }
+
+    pub fn time_to_live(&mut self, key: &str) -> Option<Duration> {
+        if let Some(entry) = self.get_key(key) {
+            return Some(entry.ttl);
+        }
+        None
     }
 
     fn is_full(&self) -> bool {
@@ -232,7 +265,9 @@ impl Storage {
 
 #[cfg(test)]
 mod tests {
-    use std::{thread, time::Duration};
+    use std::{collections::HashMap, thread, time::Duration};
+
+    use crate::EvictionPolicy;
 
     use super::{Storage, StorageOptions};
 
@@ -420,5 +455,124 @@ mod tests {
         assert_eq!(storage.store.len(), 1);
         assert_eq!(updated_entry.value, "updated_value");
         assert!(updated_entry.created_at > original_entry.created_at);
+    }
+
+    #[test]
+    fn test_insert_with_custom_ttl() {
+        let mut storage = Storage::default();
+        let ttl = Duration::from_secs(5);
+        storage.insert_with_ttl("custom_key".to_string(), "custom_val".to_string(), ttl);
+
+        let entry = storage.get_key("custom_key").unwrap();
+        assert_eq!(entry.value, "custom_val");
+        assert_eq!(entry.ttl, ttl);
+    }
+
+    #[test]
+    fn test_extend_ttl() {
+        let mut storage = Storage::default();
+        let original_ttl = Duration::from_secs(5);
+        let extension = Duration::from_secs(10);
+        storage.insert_with_ttl("key".to_string(), "val".to_string(), original_ttl);
+
+        storage.extend_ttl("key", extension);
+        let new_ttl = storage.time_to_live("key").unwrap();
+        assert_eq!(new_ttl, original_ttl + extension);
+    }
+
+    #[test]
+    fn test_time_to_live_none_for_missing_key() {
+        let mut storage = Storage::default();
+        assert!(storage.time_to_live("missing").is_none());
+    }
+
+    #[test]
+    fn test_get_entries_batch() {
+        let mut storage = Storage::default();
+        storage.insert_entry("key1".to_string(), "val1".to_string());
+        storage.insert_entry("key2".to_string(), "val2".to_string());
+
+        let result = storage.get_entries(&["key1", "key2", "missing"]);
+        assert_eq!(result["key1"].as_ref().unwrap().value, "val1");
+        assert_eq!(result["key2"].as_ref().unwrap().value, "val2");
+        assert!(result["missing"].is_none());
+    }
+
+    #[test]
+    fn test_insert_and_remove_entries_batch() {
+        let mut storage = Storage::default();
+        let mut batch = HashMap::new();
+        batch.insert("k1".to_string(), "v1".to_string());
+        batch.insert("k2".to_string(), "v2".to_string());
+
+        storage.insert_entries(batch);
+        assert!(storage.get_key("k1").is_some());
+        assert!(storage.get_key("k2").is_some());
+
+        storage.remove_entries(&["k1", "k2"]);
+        assert!(storage.get_key("k1").is_none());
+        assert!(storage.get_key("k2").is_none());
+    }
+
+    #[test]
+    fn test_eviction_policy_lru() {
+        let options = StorageOptions::new(Duration::from_secs(10), 2);
+        let mut storage = Storage::new(options);
+        storage.set_eviction_policy(&EvictionPolicy::LRU);
+
+        storage.insert_entry("k1".to_string(), "v1".to_string());
+        storage.insert_entry("k2".to_string(), "v2".to_string());
+        storage.get_key("k1"); // Make k1 recently used
+        storage.insert_entry("k3".to_string(), "v3".to_string());
+
+        assert!(storage.get_key("k2").is_none()); // Least recently used
+    }
+
+    #[test]
+    fn test_eviction_policy_lfu() {
+        let options = StorageOptions::new(Duration::from_secs(10), 2);
+        let mut storage = Storage::new(options);
+        storage.set_eviction_policy(&EvictionPolicy::LFU);
+
+        storage.insert_entry("k1".to_string(), "v1".to_string());
+        storage.insert_entry("k2".to_string(), "v2".to_string());
+        storage.get_key("k1"); // Increase access count for k1
+        storage.get_key("k1");
+        storage.insert_entry("k3".to_string(), "v3".to_string());
+
+        assert!(storage.get_key("k2").is_none()); // Least frequently used
+    }
+
+    #[test]
+    fn test_eviction_policy_size_aware() {
+        let options = StorageOptions::new(Duration::from_secs(10), 2);
+        let mut storage = Storage::new(options);
+        storage.set_eviction_policy(&EvictionPolicy::SizeAware);
+
+        storage.insert_entry("small".to_string(), "v".to_string());
+        storage.insert_entry("large".to_string(), "valuevalue".to_string());
+        storage.insert_entry("extra".to_string(), "x".to_string());
+
+        // Smallest value ("v") should be evicted
+        assert!(storage.get_key("small").is_none());
+    }
+
+    #[test]
+    fn test_reset_stats() {
+        let mut storage = Storage::default();
+        storage.insert_entry("k1".to_string(), "v1".to_string());
+        storage.get_key("k1");
+        storage.get_key("missing");
+
+        let stats = storage.get_stats();
+        assert_eq!(stats.hits, 1);
+        assert_eq!(stats.misses, 1);
+
+        storage.reset_stats();
+        let stats = storage.get_stats();
+        assert_eq!(stats.hits, 0);
+        assert_eq!(stats.misses, 0);
+        assert_eq!(stats.evictions, 0);
+        assert_eq!(stats.expired_removals, 0);
     }
 }
