@@ -497,9 +497,9 @@ mod tests {
             "key2".to_string(),
             "missing".to_string(),
         ]);
-        assert_eq!(result["key1"].as_ref().unwrap().value, "val1");
-        assert_eq!(result["key2"].as_ref().unwrap().value, "val2");
-        assert!(result["missing"].is_none());
+        assert_eq!(result[0].1.as_ref().unwrap().value, "val1".to_string());
+        assert_eq!(result[1].1.as_ref().unwrap().value, "val2".to_string());
+        assert!(result[2].1.is_none())
     }
 
     #[test]
