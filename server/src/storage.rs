@@ -89,10 +89,10 @@ impl Storage {
     }
 
     // batch operations
-    pub fn get_entries(&mut self, keys: &[&str]) -> HashMap<String, Option<StorageEntry>> {
-        let mut result = HashMap::with_capacity(keys.len());
+    pub fn get_entries(&mut self, keys: &[String]) -> Vec<(String, Option<StorageEntry>)> {
+        let mut result = Vec::new();
         for key in keys {
-            result.insert(key.to_string(), self.get_key(key));
+            result.push((key.to_string(), self.get_key(key)));
         }
 
         result
@@ -104,7 +104,7 @@ impl Storage {
         }
     }
 
-    pub fn remove_entries(&mut self, keys: &[&str]) {
+    pub fn remove_entries(&mut self, keys: &[String]) {
         for key in keys {
             self.remove_entry(key);
         }
@@ -492,7 +492,11 @@ mod tests {
         storage.insert_entry("key1".to_string(), "val1".to_string());
         storage.insert_entry("key2".to_string(), "val2".to_string());
 
-        let result = storage.get_entries(&["key1", "key2", "missing"]);
+        let result = storage.get_entries(&[
+            "key1".to_string(),
+            "key2".to_string(),
+            "missing".to_string(),
+        ]);
         assert_eq!(result["key1"].as_ref().unwrap().value, "val1");
         assert_eq!(result["key2"].as_ref().unwrap().value, "val2");
         assert!(result["missing"].is_none());
@@ -509,7 +513,7 @@ mod tests {
         assert!(storage.get_key("k1").is_some());
         assert!(storage.get_key("k2").is_some());
 
-        storage.remove_entries(&["k1", "k2"]);
+        storage.remove_entries(&["k1".to_string(), "k2".to_string()]);
         assert!(storage.get_key("k1").is_none());
         assert!(storage.get_key("k2").is_none());
     }

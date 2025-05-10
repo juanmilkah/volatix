@@ -25,10 +25,19 @@ cargo build --release
 Run some commands
 
 ```bash
-SET name foo
-GET name
-DELETE name
 HELP
+SET key value
+GET key
+DELETE key
+
+SETLIST [key, value, key, value, ..]
+SETLIST {key, value, ..}
+
+GETLIST {key, key, ..}
+GETLIST [key, key, ..]
+
+DELETELIST {key, key, ..}
+DELETELIST [key, key, ..]
 ```
 
 ## Benchmarking

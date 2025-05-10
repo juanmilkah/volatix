@@ -2,6 +2,7 @@ use std::io::{Read, Write, stdin, stdout};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream};
 
 use anyhow::Context;
+use server_lib::parse_request;
 
 #[derive(PartialEq, Debug, Eq)]
 enum Command {
@@ -10,6 +11,115 @@ enum Command {
     Delete { key: String },
     Help,
     ParseError(String),
+    GetList { list: Vec<String> },
+    SetList { list: Vec<String> },
+    // Implement this later
+    // SetList { list: Vec<(String, String)> },
+    DeleteList { list: Vec<String> },
+}
+
+fn parse_arg(chars: &[char], pointer: &mut usize, arg_name: &str) -> Result<String, String> {
+    let l = chars.len();
+    while *pointer < l && chars[*pointer].is_whitespace() {
+        *pointer += 1;
+    }
+
+    if *pointer >= l {
+        return Err(format!("Missing {arg_name}"));
+    }
+
+    let delimiter = match chars[*pointer] {
+        c @ ('"' | '\'') => {
+            *pointer += 1;
+            Some(c)
+        }
+        _ => None,
+    };
+
+    let mut arg_chars = Vec::new();
+    if let Some(delim) = delimiter {
+        while *pointer < l && chars[*pointer] != delim {
+            arg_chars.push(chars[*pointer]);
+            *pointer += 1;
+        }
+
+        if *pointer < l && chars[*pointer] == delim {
+            *pointer += 1;
+        } else {
+            return Err(format!("Unclosed quote for {arg_name}"));
+        }
+    } else {
+        if *pointer >= l {
+            return Err(format!("Missing {arg_name}"));
+        }
+
+        while *pointer < l && chars[*pointer].is_whitespace() {
+            *pointer += 1;
+        }
+
+        let delimeters = ['[', ']', '{', '}', ','];
+        while *pointer < l
+            && !chars[*pointer].is_whitespace()
+            && !delimeters.contains(&chars[*pointer])
+        {
+            arg_chars.push(chars[*pointer]);
+            *pointer += 1;
+        }
+
+        if arg_chars.is_empty() {
+            return Err(format!("Missing {arg_name} after whitespace"));
+        }
+    }
+    Ok(String::from_iter(arg_chars))
+}
+
+fn parse_list(chars: &[char], pointer: &mut usize) -> Result<Vec<String>, String> {
+    let l = chars.len();
+    let mut list = Vec::new();
+
+    while *pointer < l && chars[*pointer].is_whitespace() {
+        *pointer += 1;
+    }
+
+    // LIST {"foo", bar, "baz"}
+    // LIST [foo, "bar", "baz"]
+    let delimeter = if chars[*pointer] == '[' || chars[*pointer] == '{' {
+        *pointer += 1;
+        chars[*pointer - 1]
+    } else {
+        return Err("Missing list_start delimeter".to_string());
+    };
+    let end_delimeter = match delimeter {
+        '[' => ']',
+        '{' => '}',
+        _ => unreachable!(),
+    };
+
+    let separator = ',';
+
+    while *pointer < l {
+        while *pointer < l && chars[*pointer].is_whitespace() {
+            *pointer += 1;
+        }
+        match parse_arg(chars, pointer, "list_entry") {
+            Ok(entry) => list.push(entry),
+            Err(e) => return Err(e),
+        };
+
+        while *pointer < l && chars[*pointer].is_whitespace() {
+            *pointer += 1;
+        }
+
+        if chars[*pointer] == separator {
+            *pointer += 1;
+        }
+
+        if chars[*pointer] == end_delimeter {
+            break;
+        }
+    }
+
+    Ok(list)
 }
 
 fn parse_line(line: &str) -> Command {
@@ -32,76 +142,43 @@ fn parse_line(line: &str) -> Command {
         return Command::ParseError("Empty Command".to_string());
     }
 
-    let parse_arg = |pointer: &mut usize, arg_name: &str| -> Result<String, String> {
-        while *pointer < l && chars[*pointer].is_whitespace() {
-            *pointer += 1;
-        }
-
-        if *pointer >= l {
-            return Err(format!("Missing {arg_name}"));
-        }
-
-        let delimiter = match chars[*pointer] {
-            c @ ('"' | '\'') => {
-                *pointer += 1;
-                Some(c)
-            }
-            _ => None,
-        };
-
-        let mut arg_chars = Vec::new();
-        if let Some(delim) = delimiter {
-            while *pointer < l && chars[*pointer] != delim {
-                arg_chars.push(chars[*pointer]);
-                *pointer += 1;
-            }
-
-            if *pointer < l && chars[*pointer] == delim {
-                *pointer += 1;
-            } else {
-                return Err(format!("Unclosed quote for {arg_name}"));
-            }
-        } else {
-            if *pointer >= l {
-                return Err(format!("Missing {arg_name}"));
-            }
-
-            while *pointer < l && chars[*pointer].is_whitespace() {
-                *pointer += 1;
-            }
-
-            while *pointer < l && !chars[*pointer].is_whitespace() {
-                arg_chars.push(chars[*pointer]);
-                *pointer += 1;
-            }
-
-            if arg_chars.is_empty() {
-                return Err(format!("Missing {arg_name} after whitespace"));
-            }
-        }
-        Ok(String::from_iter(arg_chars))
-    };
-
     match cmd_str.to_uppercase().as_str() {
-        "GET" => match parse_arg(&mut pointer, "key") {
+        "GET" => match parse_arg(&chars, &mut pointer, "key") {
             Ok(key) => Command::Get { key },
             Err(e) => Command::ParseError(format!("GET: {e}")),
         },
 
-        "SET" => match parse_arg(&mut pointer, "key") {
-            Ok(key) => match parse_arg(&mut pointer, "value") {
+        "SET" => match parse_arg(&chars, &mut pointer, "key") {
+            Ok(key) => match parse_arg(&chars, &mut pointer, "value") {
                 Ok(value) => Command::Set { key, value },
                 Err(e) => Command::ParseError(format!("SET: {e}")),
             },
             Err(e) => Command::ParseError(format!("SET: {e}")),
         },
 
-        "DELETE" => match parse_arg(&mut pointer, "key") {
+        "DELETE" => match parse_arg(&chars, &mut pointer, "key") {
             Ok(key) => Command::Delete { key },
             Err(e) => Command::ParseError(format!("DELETE: {e}")),
         },
 
         "HELP" => Command::Help,
+
+        // GETLIST ["foo", "bar", "baz"]
+        "GETLIST" => match parse_list(&chars, &mut pointer) {
+            Ok(keys) => Command::GetList { list: keys },
+            Err(e) => Command::ParseError(e),
+        },
+
+        // SETLIST ["foo", "bar", "foofoo", "barbar"]
+        "SETLIST" => match parse_list(&chars, &mut pointer) {
+            Ok(l) => Command::SetList { list: l },
+            Err(e) => Command::ParseError(e),
+        },
+
+        "DELETELIST" => match parse_list(&chars, &mut pointer) {
+            Ok(keys) => Command::DeleteList { list: keys },
+            Err(e) => Command::ParseError(e),
+        },
 
         _ => Command::ParseError(format!("Unknown command: {cmd_str}")),
     }
@@ -186,12 +263,49 @@ fn serialize_request(command: &Command) -> Vec<u8> {
 
             arr.0.as_bytes().to_vec()
         }
+
+        Command::DeleteList { list } => {
+            let mut arr = Vec::new();
+            let cmd = Bstring::new("DELETELIST");
+            arr.push(cmd);
+            for e in list {
+                arr.push(Bstring::new(e));
+            }
+
+            let arr = Array::new(&arr);
+            arr.0.as_bytes().to_vec()
+        }
+
+        Command::GetList { list } => {
+            let mut arr = Vec::new();
+            let cmd = Bstring::new("GETLIST");
+            arr.push(cmd);
+            for e in list {
+                arr.push(Bstring::new(e));
+            }
+
+            let arr = Array::new(&arr);
+            arr.0.as_bytes().to_vec()
+        }
+
+        Command::SetList { list } => {
+            let mut arr = Vec::new();
+            let cmd = Bstring::new("SETLIST");
+            arr.push(cmd);
+            for e in list {
+                arr.push(Bstring::new(e));
+            }
+
+            let arr = Array::new(&arr);
+            arr.0.as_bytes().to_vec()
+        }
+
         _ => unreachable!(),
     }
 }
 
 fn deserialize_response(resp: &[u8]) -> anyhow::Result<Vec<String>> {
-    let resp = server_lib::parse_request(resp).context("deserialise response")?;
+    let resp = parse_request(resp).context("deserialise response")?;
     if resp.is_empty() {
         return Ok(Vec::new());
     }
@@ -203,8 +317,7 @@ fn deserialize_response(resp: &[u8]) -> anyhow::Result<Vec<String>> {
                 .as_ref()
                 .map(|c| String::from_utf8_lossy(c).to_string())
         })
-        .filter(|r| r.is_some())
-        .flatten()
+        .map(|c| c.unwrap_or("NULL".to_string()))
         .collect())
 }
 
@@ -217,7 +330,7 @@ fn help() {
 
 fn main() -> anyhow::Result<()> {
     println!("VOLATIX CLI!!");
-    println!("If stuck try `HELP`");
+    println!("If stuck try `HELP` and `EXIT`");
 
     let stdin = stdin();
     let mut line = String::new();
@@ -239,6 +352,10 @@ fn main() -> anyhow::Result<()> {
         let line = line.trim_end_matches('\n');
         if line.is_empty() {
             continue;
+        }
+
+        if line == "exit" {
+            break;
         }
 
         let command = parse_line(line);
@@ -269,10 +386,12 @@ fn main() -> anyhow::Result<()> {
             println!("{resp:?}");
         }
     }
+
+    Ok(())
 }
 
 #[cfg(test)]
-mod tests {
+mod cli_parsing {
     use super::*;
 
     #[test]
@@ -464,5 +583,29 @@ mod tests {
         // or if the line is `  `, it's handled.
         assert_eq!(parse_line(""), Command::Help);
         assert_eq!(parse_line(" "), Command::Help);
+    }
+
+    #[test]
+    fn test_parse_lists() {
+        let l: Vec<char> = "['foo', 'bar', 'baz']".chars().collect();
+        let mut p = 0;
+        let r = parse_list(&l, &mut p).unwrap();
+        assert_eq!(r, vec!["foo", "bar", "baz"]);
+    }
+
+    #[test]
+    fn test_parse_curly_list() {
+        let l: Vec<char> = "{'foo',   'bar',  'baz'}".chars().collect();
+        let mut p = 0;
+        let r = parse_list(&l, &mut p).unwrap();
+        assert_eq!(r, vec!["foo", "bar", "baz"]);
+    }
+
+    #[test]
+    fn test_parse_unquoted_lists() {
+        let l: Vec<char> = "[foo, bar, baz]".chars().collect();
+        let mut p = 0;
+        let r = parse_list(&l, &mut p).unwrap();
+        assert_eq!(r, vec!["foo", "bar", "baz"]);
     }
 }
