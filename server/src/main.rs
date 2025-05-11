@@ -4,10 +4,12 @@ use std::{
     io::{Read, Write},
     net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream},
     sync::Arc,
+    time::Duration,
 };
 
 use server_lib::{
-    DataType, Request, Storage, StorageEntry, StorageOptions, ThreadPool, parse_request,
+    ConfigEntry, DataType, EvictionPolicy, Request, Storage, StorageEntry, StorageOptions,
+    ThreadPool, parse_request,
 };
 
 fn null_array() -> Vec<u8> {
@@ -65,13 +67,9 @@ impl Array {
 }
 
 fn get_data(req: &Request) -> Option<String> {
-    match req.data_type {
-        DataType::BulkStrings => req
-            .content
-            .as_ref()
-            .map(|content| String::from_utf8_lossy(content).to_string()),
-        _ => None,
-    }
+    req.content
+        .as_ref()
+        .map(|content| String::from_utf8_lossy(content).to_string())
 }
 
 enum Command {
@@ -81,6 +79,14 @@ enum Command {
     SetList,
     GetList,
     DeleteList,
+    GetStats,
+    ResetStats,
+    ConfSet,
+    ConfGet,
+    ExtendTtl,
+    SetwTtl,
+    GetTtl,
+    EntryStats,
 }
 
 fn process_request(req: &[Request], storage: Arc<parking_lot::RwLock<Storage>>) -> Vec<u8> {
@@ -103,7 +109,16 @@ fn process_request(req: &[Request], storage: Arc<parking_lot::RwLock<Storage>>) 
             "GETLIST" => Command::GetList,
             "SETLIST" => Command::SetList,
             "DELETELIST" => Command::DeleteList,
-            _ => return simple_error("unknow command: {data}"),
+            "GETSTATS" => Command::GetStats,
+            "RESETSTATS" => Command::ResetStats,
+            "SETWTTL" => Command::SetwTtl,
+            "GETTTL" => Command::GetTtl,
+            "EXTENDTTL" => Command::ExtendTtl,
+            "CONFGET" => Command::ConfGet,
+            "CONFSET" => Command::ConfSet,
+            "ENTRYSTATS" => Command::EntryStats,
+
+            _ => return simple_error(&format!("unknow command: {data:?}")),
         },
         None => return bstring(None),
     };
@@ -115,9 +130,24 @@ fn process_request(req: &[Request], storage: Arc<parking_lot::RwLock<Storage>>) 
                 return simple_error("Missing key");
             }
             if let Some(key) = get_data(&req[i]) {
-                let key = storage.write().get_key(&key);
+                let key = storage.write().get_entry(&key);
                 if let Some(key) = key {
                     return bstring(Some(key.value));
+                }
+                bstring(None)
+            } else {
+                bstring(None)
+            }
+        }
+
+        Command::EntryStats => {
+            if req.len() < 2 {
+                return simple_error("Missing key");
+            }
+            if let Some(key) = get_data(&req[i]) {
+                let entry = storage.write().get_entry(&key);
+                if let Some(e) = entry {
+                    return bstring(Some(e.to_string()));
                 }
                 bstring(None)
             } else {
@@ -208,6 +238,144 @@ fn process_request(req: &[Request], storage: Arc<parking_lot::RwLock<Storage>>) 
             storage.write().remove_entries(&keys);
 
             bstring(Some("SUCCESS".to_string()))
+        }
+
+        Command::ConfSet => {
+            if req.len() < 3 {
+                return simple_error("Missing values");
+            }
+
+            match get_data(&req[i]) {
+                Some(key) => match get_data(&req[i + 1]) {
+                    Some(value) => {
+                        let conf = match key.to_uppercase().as_str() {
+                            "MAXCAP" => {
+                                let v = match value.parse::<u64>() {
+                                    Ok(v) => v,
+                                    Err(_) => return simple_error("invalid MAXCAP value"),
+                                };
+                                ConfigEntry::MaxCapacity(v)
+                            }
+                            "GLOBALTTL" => {
+                                let v = match value.parse::<u64>() {
+                                    Ok(v) => v,
+                                    Err(_) => return simple_error("invalid GLOBALTTL value"),
+                                };
+                                ConfigEntry::GlobalTtl(v)
+                            }
+                            "EVICTPOLICY" => {
+                                let v = match value.to_uppercase().as_str() {
+                                    "OLDEST" => EvictionPolicy::Oldest,
+                                    "LFU" => EvictionPolicy::LFU,
+                                    "LRU" => EvictionPolicy::LRU,
+                                    "SIZEAWARE" => EvictionPolicy::SizeAware,
+                                    _ => return simple_error("Invalid EVICTPOLICY"),
+                                };
+
+                                ConfigEntry::EvictPolicy(v)
+                            }
+                            _ => return simple_error("Invalid config key"),
+                        };
+                        storage.write().set_config_entry(&conf);
+                        bstring(Some("SUCCESS".to_string()))
+                    }
+                    None => simple_error("Missing value"),
+                },
+                None => simple_error("Missing key"),
+            }
+        }
+
+        Command::ConfGet => {
+            if req.len() < 2 {
+                return simple_error("Missing key");
+            }
+            if let Some(key) = get_data(&req[i]) {
+                let entry = storage.write().get_config_entry(&key.to_uppercase());
+                if let Some(entry) = entry {
+                    bstring(Some(entry.to_string()))
+                } else {
+                    bstring(None)
+                }
+            } else {
+                bstring(None)
+            }
+        }
+
+        Command::ResetStats => {
+            storage.write().reset_stats();
+
+            bstring(Some("SUCCESS".to_string()))
+        }
+
+        Command::GetStats => {
+            let stats = storage.write().get_stats();
+            bstring(Some(stats.to_string()))
+        }
+
+        Command::SetwTtl => {
+            if req.len() < 4 {
+                return simple_error("Missing values");
+            }
+
+            match get_data(&req[i]) {
+                Some(key) => match get_data(&req[i + 1]) {
+                    Some(value) => match get_data(&req[i + 2]) {
+                        Some(ttl) => {
+                            let ttl = match ttl.parse::<u64>() {
+                                Ok(v) => v,
+                                Err(e) => return simple_error(&format!("Invalid ttl: {e:?}")),
+                            };
+                            let ttl = Duration::from_secs(ttl);
+                            storage.write().insert_with_ttl(key, value, ttl);
+                            bstring(Some("SUCCESS".to_string()))
+                        }
+                        None => simple_error("Missing ttl"),
+                    },
+                    None => simple_error("Missing value"),
+                },
+                None => simple_error("Missing key"),
+            }
+        }
+
+        Command::ExtendTtl => {
+            if req.len() < 3 {
+                return simple_error("Missing values");
+            }
+
+            match get_data(&req[i]) {
+                Some(key) => match get_data(&req[i + 1]) {
+                    Some(addition_ttl) => {
+                        let ttl = match addition_ttl.parse::<i64>() {
+                            Ok(v) => v,
+                            Err(_) => return simple_error("Invalid Addition TTL value"),
+                        };
+
+                        let result = storage.write().extend_ttl(&key, ttl);
+                        match result {
+                            Ok(()) => bstring(Some("SUCCESS".to_string())),
+                            Err(e) => bstring(Some(e)),
+                        }
+                    }
+                    None => simple_error("Missing value"),
+                },
+                None => simple_error("Missing key"),
+            }
+        }
+
+        Command::GetTtl => {
+            if req.len() < 2 {
+                return simple_error("Missing key");
+            }
+            if let Some(key) = get_data(&req[i]) {
+                let value = storage.write().time_to_live(&key);
+                if let Some(v) = value {
+                    // TODO! Fix this later
+                    return bstring(Some(v.as_secs().to_string()));
+                }
+                bstring(None)
+            } else {
+                bstring(None)
+            }
         }
     }
 }

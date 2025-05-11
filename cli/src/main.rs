@@ -6,16 +6,55 @@ use server_lib::parse_request;
 
 #[derive(PartialEq, Debug, Eq)]
 enum Command {
-    Get { key: String },
-    Set { key: String, value: String },
-    Delete { key: String },
+    Get {
+        key: String,
+    },
+    Set {
+        key: String,
+        value: String,
+    },
+    Delete {
+        key: String,
+    },
     Help,
     ParseError(String),
-    GetList { list: Vec<String> },
-    SetList { list: Vec<String> },
-    // Implement this later
-    // SetList { list: Vec<(String, String)> },
-    DeleteList { list: Vec<String> },
+    GetList {
+        list: Vec<String>,
+    },
+    SetList {
+        list: Vec<String>,
+    },
+    DeleteList {
+        list: Vec<String>,
+    },
+    GetStats,
+    ResetStats,
+    // if ttl is negative, the value should be expired on creation
+    SetwTtl {
+        key: String,
+        value: String,
+        ttl: u64,
+    },
+
+    // allow increment and decrement by using i64
+    ExtendTtl {
+        key: String,
+        addition: i64,
+    },
+    GetTtl {
+        key: String,
+    },
+    // set a config value like global ttl
+    ConfSet {
+        key: String,
+        value: String,
+    },
+    ConfGet {
+        key: String,
+    },
+    EntryStats {
+        key: String,
+    },
 }
 
 fn parse_arg(chars: &[char], pointer: &mut usize, arg_name: &str) -> Result<String, String> {
@@ -180,46 +219,107 @@ fn parse_line(line: &str) -> Command {
             Err(e) => Command::ParseError(e),
         },
 
+        "GETSTATS" => Command::GetStats,
+
+        "RESETSTATS" => Command::ResetStats,
+
+        "SETWTTL" => match parse_arg(&chars, &mut pointer, "key") {
+            Ok(key) => match parse_arg(&chars, &mut pointer, "value") {
+                Ok(value) => match parse_arg(&chars, &mut pointer, "ttl") {
+                    Ok(ttl) => {
+                        let ttl = match ttl.parse::<u64>() {
+                            Ok(v) => v,
+                            Err(e) => return Command::ParseError(format!("{e:?}")),
+                        };
+                        Command::SetwTtl { key, value, ttl }
+                    }
+                    Err(e) => Command::ParseError(e),
+                },
+                Err(e) => Command::ParseError(e),
+            },
+            Err(e) => Command::ParseError(e),
+        },
+
+        "EXTENDTTL" => match parse_arg(&chars, &mut pointer, "key") {
+            Ok(key) => match parse_arg(&chars, &mut pointer, "ttl") {
+                Ok(v) => {
+                    let ttl = match v.parse::<i64>() {
+                        Ok(v) => v,
+                        Err(e) => return Command::ParseError(format!("ERROR: {e}")),
+                    };
+                    Command::ExtendTtl { key, addition: ttl }
+                }
+                Err(e) => Command::ParseError(e),
+            },
+            Err(e) => Command::ParseError(e),
+        },
+
+        "GETTTL" => match parse_arg(&chars, &mut pointer, "key") {
+            Ok(key) => Command::GetTtl { key },
+            Err(e) => Command::ParseError(format!("GET: {e}")),
+        },
+
+        // set a config value
+        "CONFSET" => match parse_arg(&chars, &mut pointer, "key") {
+            Ok(key) => match parse_arg(&chars, &mut pointer, "value") {
+                Ok(value) => Command::ConfSet { key, value },
+                Err(e) => Command::ParseError(e),
+            },
+            Err(e) => Command::ParseError(e),
+        },
+
+        // Get a config value
+        "CONFGET" => match parse_arg(&chars, &mut pointer, "key") {
+            Ok(key) => Command::ConfGet { key },
+            Err(e) => Command::ParseError(e),
+        },
+
+        "ENTRYSTATS" => match parse_arg(&chars, &mut pointer, "key") {
+            Ok(key) => Command::EntryStats { key },
+            Err(e) => Command::ParseError(e),
+        },
+
         _ => Command::ParseError(format!("Unknown command: {cmd_str}")),
     }
 }
 
 // $<length>\r\n<data>\r\n
-struct Bstring(String);
+fn bstring(s: &str) -> String {
+    let mut bstring = String::new();
+    let terminator = "\r\n";
 
-impl Bstring {
-    fn new(s: &str) -> Self {
-        let mut bstring = String::new();
-        let terminator = "\r\n";
+    bstring.push('$');
+    bstring.push_str(&s.len().to_string());
+    bstring.push_str(terminator);
+    bstring.push_str(s);
+    bstring.push_str(terminator);
+    bstring
+}
 
-        bstring.push('$');
-        bstring.push_str(&s.len().to_string());
-        bstring.push_str(terminator);
-        bstring.push_str(s);
-        bstring.push_str(terminator);
-
-        Bstring(bstring)
-    }
+// This type is a CRLF-terminated string that represents a signed,
+// base-10, 64-bit integer.
+// :[<+|->]<value>\r\n
+fn integer(n: i64) -> String {
+    let mut s = String::new();
+    s.push(':');
+    s.push_str(&n.to_string());
+    s.push_str("\r\n");
+    s
 }
 
 // *<number-of-elements>\r\n<element-1>...<element-n>
-struct Array(String);
+fn array(elems: &[String]) -> String {
+    let mut arr = String::new();
+    let terminator = "\r\n";
 
-impl Array {
-    fn new(elems: &[Bstring]) -> Self {
-        let mut arr = String::new();
-        let terminator = "\r\n";
+    arr.push('*');
+    arr.push_str(&elems.len().to_string());
+    arr.push_str(terminator);
 
-        arr.push('*');
-        arr.push_str(&elems.len().to_string());
-        arr.push_str(terminator);
-
-        for s in elems {
-            arr.push_str(&s.0);
-        }
-
-        Array(arr)
+    for s in elems {
+        arr.push_str(s);
     }
+    arr
 }
 
 fn serialize_request(command: &Command) -> Vec<u8> {
@@ -229,75 +329,131 @@ fn serialize_request(command: &Command) -> Vec<u8> {
     // for the command.
     match command {
         Command::Get { key } => {
-            let mut arr = Vec::new();
-            let cmd = Bstring::new("GET");
-            let key = Bstring::new(key);
+            let v = [bstring("GET"), bstring(key)];
+            let arr = array(&v);
 
-            arr.push(cmd);
-            arr.push(key);
-            let arr = Array::new(&arr);
-
-            arr.0.as_bytes().to_vec()
+            arr.as_bytes().to_vec()
         }
         Command::Set { key, value } => {
-            let mut arr = Vec::new();
-            let cmd = Bstring::new("SET");
-            let key = Bstring::new(key);
-            let value = Bstring::new(value);
+            let v = [bstring("SET"), bstring(key), bstring(value)];
+            let arr = array(&v);
 
-            arr.push(cmd);
-            arr.push(key);
-            arr.push(value);
-            let arr = Array::new(&arr);
-
-            arr.0.as_bytes().to_vec()
+            arr.as_bytes().to_vec()
         }
         Command::Delete { key } => {
             let mut arr = Vec::new();
-            let cmd = Bstring::new("DELETE");
-            let key = Bstring::new(key);
+            let cmd = bstring("DELETE");
+            let key = bstring(key);
 
             arr.push(cmd);
             arr.push(key);
-            let arr = Array::new(&arr);
+            let arr = array(&arr);
 
-            arr.0.as_bytes().to_vec()
+            arr.as_bytes().to_vec()
         }
 
         Command::DeleteList { list } => {
             let mut arr = Vec::new();
-            let cmd = Bstring::new("DELETELIST");
+            let cmd = bstring("DELETELIST");
             arr.push(cmd);
             for e in list {
-                arr.push(Bstring::new(e));
+                arr.push(bstring(e));
             }
 
-            let arr = Array::new(&arr);
-            arr.0.as_bytes().to_vec()
+            let arr = array(&arr);
+            arr.as_bytes().to_vec()
         }
 
         Command::GetList { list } => {
             let mut arr = Vec::new();
-            let cmd = Bstring::new("GETLIST");
+            let cmd = bstring("GETLIST");
             arr.push(cmd);
             for e in list {
-                arr.push(Bstring::new(e));
+                arr.push(bstring(e));
             }
 
-            let arr = Array::new(&arr);
-            arr.0.as_bytes().to_vec()
+            let arr = array(&arr);
+            arr.as_bytes().to_vec()
         }
 
         Command::SetList { list } => {
             let mut arr = Vec::new();
-            let cmd = Bstring::new("SETLIST");
+            let cmd = bstring("SETLIST");
             arr.push(cmd);
             for e in list {
-                arr.push(Bstring::new(e));
+                arr.push(bstring(e));
             }
 
-            let arr = Array::new(&arr);
-            arr.0.as_bytes().to_vec()
+            let arr = array(&arr);
+            arr.as_bytes().to_vec()
+        }
+
+        Command::GetStats => {
+            let cmd = bstring("GETSTATS");
+            let arr = array(&[cmd]);
+            arr.as_bytes().to_vec()
+        }
+
+        Command::ResetStats => {
+            let cmd = bstring("RESETSTATS");
+            let arr = array(&[cmd]);
+            arr.as_bytes().to_vec()
+        }
+
+        Command::ConfGet { key } => {
+            let v = [bstring("CONFGET"), bstring(key)];
+            let arr = array(&v);
+
+            arr.as_bytes().to_vec()
+        }
+
+        Command::ConfSet { key, value } => {
+            let v = [bstring("CONFSET"), bstring(key), bstring(value)];
+            let arr = array(&v);
+            arr.as_bytes().to_vec()
+        }
+
+        Command::SetwTtl { key, value, ttl } => {
+            // we'll have to handle this manually
+            // The Integer messes things up
+            let terminator = "\r\n";
+            let mut arr = String::new();
+
+            arr.push('*');
+            arr.push_str(&4.to_string());
+            arr.push_str(terminator);
+            arr.push_str(&bstring("SETWTTL"));
+            arr.push_str(&bstring(key));
+            arr.push_str(&bstring(value));
+            arr.push_str(&integer(*ttl as i64));
+
+            arr.as_bytes().to_vec()
+        }
+
+        Command::ExtendTtl { key, addition } => {
+            let mut arr = String::new();
+
+            arr.push('*');
+            arr.push_str(&3.to_string());
+            arr.push_str("\r\n");
+            arr.push_str(&bstring("EXTENDTTL"));
+            arr.push_str(&bstring(key));
+            arr.push_str(&integer(*addition));
+
+            arr.as_bytes().to_vec()
+        }
+
+        Command::GetTtl { key } => {
+            let v = [bstring("GETTTL"), bstring(key)];
+            let arr = array(&v);
+
+            arr.as_bytes().to_vec()
+        }
+
+        Command::EntryStats { key } => {
+            let v = [bstring("ENTRYSTATS"), bstring(key)];
+            let arr = array(&v);
+            arr.as_bytes().to_vec()
         }
 
         _ => unreachable!(),
@@ -323,9 +479,25 @@ fn deserialize_response(resp: &[u8]) -> anyhow::Result<Vec<String>> {
 
 fn help() {
     println!("USAGE: ");
-    println!("  SET key value");
+    println!("  SET key<string> value<any>");
     println!("  GET key");
     println!("  DELETE key");
+    println!();
+    println!("  SETLIST [key, value, ..]");
+    println!("  SETLIST {{key, value, ..}}");
+    println!("  GETLIST [key, key, ..]");
+    println!("  DELETELIST [key key, ..]");
+    println!();
+    println!("  CONFSET key value");
+    println!("  CONFGET key");
+    println!();
+    println!("  GETSTATS");
+    println!("  RESETSTATS");
+    println!("  ENTRYSTATS key");
+    println!();
+    println!("  SETWTTL key value<u64>");
+    println!("  EXTENDTTL key value<i64>");
+    println!("  GETTTL key");
 }
 
 fn main() -> anyhow::Result<()> {
