@@ -87,6 +87,7 @@ enum Command {
     SetwTtl,
     GetTtl,
     EntryStats,
+    ConfOptions,
 }
 
 fn process_request(req: &[Request], storage: Arc<parking_lot::RwLock<Storage>>) -> Vec<u8> {
@@ -117,8 +118,9 @@ fn process_request(req: &[Request], storage: Arc<parking_lot::RwLock<Storage>>) 
             "CONFGET" => Command::ConfGet,
             "CONFSET" => Command::ConfSet,
             "ENTRYSTATS" => Command::EntryStats,
+            "CONFOPTIONS" => Command::ConfOptions,
 
-            _ => return simple_error(&format!("unknow command: {data:?}")),
+            _ => return simple_error(&format!("unknown command: {data:?}")),
         },
         None => return bstring(None),
     };
@@ -376,6 +378,11 @@ fn process_request(req: &[Request], storage: Arc<parking_lot::RwLock<Storage>>) 
             } else {
                 bstring(None)
             }
+        }
+
+        Command::ConfOptions => {
+            let opts = storage.read().get_options();
+            bstring(Some(opts.to_string()))
         }
     }
 }

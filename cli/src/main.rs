@@ -55,6 +55,8 @@ enum Command {
     EntryStats {
         key: String,
     },
+
+    ConfOptions,
 }
 
 fn parse_arg(chars: &[char], pointer: &mut usize, arg_name: &str) -> Result<String, String> {
@@ -279,6 +281,8 @@ fn parse_line(line: &str) -> Command {
             Err(e) => Command::ParseError(e),
         },
 
+        "CONFOPTIONS" => Command::ConfOptions,
+
         _ => Command::ParseError(format!("Unknown command: {cmd_str}")),
     }
 }
@@ -456,6 +460,11 @@ fn serialize_request(command: &Command) -> Vec<u8> {
             arr.as_bytes().to_vec()
         }
 
+        Command::ConfOptions => {
+            let arr = array(&[bstring("CONFOPTIONS")]);
+            arr.as_bytes().to_vec()
+        }
+
         _ => unreachable!(),
     }
 }
@@ -488,6 +497,7 @@ fn help() {
     println!("  GETLIST [key, key, ..]");
     println!("  DELETELIST [key key, ..]");
     println!();
+    println!("  CONFOPTIONS");
     println!("  CONFSET key value");
     println!("  CONFGET key");
     println!();

@@ -37,7 +37,7 @@ impl StorageEntry {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct StorageOptions {
     pub ttl: Duration,
     pub max_capacity: u64,
@@ -49,7 +49,7 @@ impl StorageOptions {
         Self {
             ttl,
             max_capacity: max_cap,
-            eviction_policy: evict_policy.clone(),
+            eviction_policy: *evict_policy,
         }
     }
 }
@@ -61,6 +61,12 @@ impl Default for StorageOptions {
             max_capacity: 1000,
             eviction_policy: EvictionPolicy::default(),
         }
+    }
+}
+
+impl Display for StorageOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "{self:?}")
     }
 }
 
@@ -79,7 +85,7 @@ impl Display for StorageStats {
     }
 }
 
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, Copy)]
 pub enum EvictionPolicy {
     #[default]
     Oldest, // Oldest created
@@ -306,9 +312,7 @@ impl Storage {
 
     pub fn get_config_entry(&self, key: &str) -> Option<ConfigEntry> {
         match key {
-            "EVICTPOLICY" => Some(ConfigEntry::EvictPolicy(
-                self.options.eviction_policy.clone(),
-            )),
+            "EVICTPOLICY" => Some(ConfigEntry::EvictPolicy(self.options.eviction_policy)),
             "MAXCAP" => Some(ConfigEntry::MaxCapacity(self.options.max_capacity)),
             "GLOBALTTL" => Some(ConfigEntry::GlobalTtl(self.options.ttl.as_secs())),
             _ => None,
@@ -318,7 +322,7 @@ impl Storage {
     pub fn set_config_entry(&mut self, entry: &ConfigEntry) {
         match entry {
             ConfigEntry::EvictPolicy(p) => {
-                self.options.eviction_policy = p.clone();
+                self.options.eviction_policy = *p;
             }
             ConfigEntry::GlobalTtl(t) => {
                 self.options.ttl = Duration::from_secs(*t);
@@ -327,6 +331,10 @@ impl Storage {
                 self.options.max_capacity = *c;
             }
         }
+    }
+
+    pub fn get_options(&self) -> StorageOptions {
+        self.options
     }
 }
 
