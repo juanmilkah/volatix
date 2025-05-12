@@ -1,25 +1,31 @@
 use std::{
     collections::HashMap,
     fmt::Display,
-    time::{Duration, Instant},
+    fs::File,
+    io::{BufReader, BufWriter, Read},
+    path::Path,
+    time::{Duration, SystemTime},
 };
+
+use anyhow::Context;
+use serde::{Deserialize, Serialize};
 
 // Cons of BTreeMap compared to HashMap
 // Slower lookups: O(log n) time complexity for lookups vs O(1) average case for HashMap.
 // Slower insertions: O(log n) vs O(1) average for HashMap.
 // Slower deletions: O(log n) vs O(1) average for HashMap.
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 pub struct Storage {
     pub store: HashMap<String, StorageEntry>,
     pub options: StorageOptions,
     pub stats: StorageStats,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageEntry {
     pub value: String,
-    pub created_at: Instant,
-    pub last_accessed: Instant,
+    pub created_at: SystemTime,
+    pub last_accessed: SystemTime,
     pub access_count: usize,
     pub entry_size: usize,
     pub ttl: Duration,
@@ -42,11 +48,14 @@ impl Display for StorageEntry {
 
 impl StorageEntry {
     fn is_expired(&self) -> bool {
-        self.created_at.elapsed() > self.ttl
+        SystemTime::now()
+            .duration_since(self.created_at)
+            .expect("clock gone backwards")
+            > self.ttl
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct StorageOptions {
     pub ttl: Duration,
     pub max_capacity: u64,
@@ -85,7 +94,7 @@ impl Display for StorageOptions {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct StorageStats {
     pub hits: usize,
     pub misses: usize,
@@ -104,7 +113,7 @@ impl Display for StorageStats {
     }
 }
 
-#[derive(Default, Debug, Clone, Copy)]
+#[derive(Default, Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum EvictionPolicy {
     #[default]
     Oldest, // Oldest created
@@ -155,7 +164,7 @@ impl Storage {
             if !entry.is_expired() {
                 self.stats.hits += 1;
                 entry.access_count += 1;
-                entry.last_accessed = Instant::now();
+                entry.last_accessed = SystemTime::now();
                 return Some(entry.clone());
             }
             self.remove_expired();
@@ -191,7 +200,7 @@ impl Storage {
             self.evict_entries();
         }
 
-        let timestamp = Instant::now();
+        let timestamp = SystemTime::now();
         let entry_size = value.len();
         let entry = StorageEntry {
             value,
@@ -211,11 +220,12 @@ impl Storage {
 
     pub fn insert_with_ttl(&mut self, key: String, value: String, ttl: Duration) {
         let entry_size = value.len();
+        let now = SystemTime::now();
 
         let entry = StorageEntry {
             value,
-            created_at: Instant::now(),
-            last_accessed: Instant::now(),
+            created_at: now,
+            last_accessed: now,
             access_count: 0,
             entry_size,
             ttl,
@@ -237,7 +247,7 @@ impl Storage {
                 entry.ttl += Duration::from_secs(additional_time as u64);
             }
             entry.access_count += 1;
-            entry.last_accessed = Instant::now();
+            entry.last_accessed = SystemTime::now();
         }
 
         Ok(())
@@ -269,8 +279,12 @@ impl Storage {
 
     fn remove_expired(&mut self) {
         let prev_count = self.store.keys().count();
-        self.store
-            .retain(|_, value| value.created_at.elapsed() < value.ttl);
+        let now = SystemTime::now();
+        self.store.retain(|_, value| {
+            now.duration_since(value.created_at)
+                .expect("clock gone backwards")
+                < value.ttl
+        });
         let current_count = self.store.keys().count();
         let removed = prev_count - current_count;
         self.stats.expired_removals += removed;
@@ -369,6 +383,39 @@ impl Storage {
 
     pub fn get_options(&self) -> StorageOptions {
         self.options
+    }
+
+    pub fn load_from_disk(&mut self, path: &str) -> anyhow::Result<()> {
+        let path = Path::new(path);
+        if !path.exists() {
+            return Ok(());
+        }
+
+        let file = File::open(path).context("open db")?;
+        let mut reader = BufReader::new(file);
+        let mut buffer = Vec::new();
+
+        let read = reader.read(&mut buffer).context("read bytes into buffer")?;
+        if read == 0 {
+            return Ok(());
+        }
+
+        *self = bincode2::deserialize(&buffer).context("deserialize from buffer")?;
+
+        Ok(())
+    }
+
+    pub fn save_to_disk(&self, path: &str) -> anyhow::Result<()> {
+        let path = Path::new(path);
+        if !path.exists() {
+            File::create(path).context("create db file")?;
+        }
+
+        let file = File::open(path).context("open db file")?;
+        let mut writer = BufWriter::new(file);
+
+        bincode2::serialize_into(&mut writer, &self).context("serialize into db")?;
+        Ok(())
     }
 }
 

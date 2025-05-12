@@ -431,6 +431,8 @@ fn main() -> anyhow::Result<()> {
 
     let options = StorageOptions::default();
     let storage = Arc::new(parking_lot::RwLock::new(Storage::new(options)));
+    let persistent_path = "volatix.db";
+    storage.write().load_from_disk(persistent_path)?;
     let pool = ThreadPool::new(thread_count); // 4 threads
 
     for stream in listener.incoming() {
@@ -442,6 +444,11 @@ fn main() -> anyhow::Result<()> {
             Err(e) => eprintln!("ERROR: {e}"),
         }
     }
+
+    // TODO: Figure this out
+    // println!("Saving data to disk...");
+    // storage.write().save_to_disk(persistent_path)?;
+    // println!("Data saved successfully. Server shutdown complete.");
 
     Ok(())
 }

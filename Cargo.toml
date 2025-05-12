@@ -8,13 +8,14 @@ authors = ["Juan Milkah <juanmilkah@gmail.com>"]
 license = "MIT"
 
 [workspace]
-resolve = "2"
 members = ["server", "cli", "volatix-bench"]
 
 [workspace.dependencies]
 anyhow = "1.0.98"
 parking_lot = "0.12.3"
 rand = "0.9.1"
+serde = { version = "1.0.219", features = ["derive"] }
+bincode2 = "2.0.1"
 
 [[bin]]
 name = "server"
@@ -36,3 +37,5 @@ path = "volatix-bench/src/main.rs"
 anyhow.workspace = true
 rand.workspace = true
 parking_lot.workspace = true
+serde.workspace = true
+bincode2.workspace = true
