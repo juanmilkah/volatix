@@ -27,7 +27,16 @@ pub struct StorageEntry {
 
 impl Display for StorageEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "{self:?}")
+        write!(
+            f,
+            "Value: {}, Created_at: {:?}, Last accessed: {:?}, Access Count: {}, Entry size: {} Ttl: {}",
+            self.value,
+            self.created_at,
+            self.last_accessed,
+            self.access_count,
+            self.entry_size,
+            self.ttl.as_secs()
+        )
     }
 }
 
@@ -66,7 +75,13 @@ impl Default for StorageOptions {
 
 impl Display for StorageOptions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "{self:?}")
+        write!(
+            f,
+            "TTL: {}, MAXCAP: {}, EVICTPOLICY: {}",
+            self.ttl.as_secs(),
+            self.max_capacity,
+            self.eviction_policy
+        )
     }
 }
 
@@ -81,7 +96,11 @@ pub struct StorageStats {
 
 impl Display for StorageStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "{self:?}")
+        write!(
+            f,
+            "Hits: {}, Misses: {}, Evictions: {}, Expired Removals: {}",
+            self.hits, self.misses, self.evictions, self.expired_removals
+        )
     }
 }
 
@@ -94,6 +113,17 @@ pub enum EvictionPolicy {
     SizeAware, // Largest items
 }
 
+impl Display for EvictionPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EvictionPolicy::Oldest => write!(f, "Oldest"),
+            EvictionPolicy::LRU => write!(f, "LRU"),
+            EvictionPolicy::LFU => write!(f, "LFU"),
+            EvictionPolicy::SizeAware => write!(f, "SizeAware"),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum ConfigEntry {
     EvictPolicy(EvictionPolicy),
@@ -103,7 +133,11 @@ pub enum ConfigEntry {
 
 impl Display for ConfigEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "{self:?}")
+        match self {
+            ConfigEntry::EvictPolicy(e) => write!(f, "EVICTPOLICY: {e}"),
+            ConfigEntry::GlobalTtl(t) => write!(f, "GLOBALTTL: {t}"),
+            ConfigEntry::MaxCapacity(c) => write!(f, "MAXCAP: {c}"),
+        }
     }
 }
 
