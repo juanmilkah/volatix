@@ -9,7 +9,7 @@ use std::{
 
 use server_lib::{
     ConfigEntry, DataType, EvictionPolicy, Request, Storage, StorageEntry, StorageOptions,
-    ThreadPool, parse_request,
+    StorageValue, ThreadPool, parse_request,
 };
 
 fn null_array() -> Vec<u8> {
@@ -73,7 +73,9 @@ fn get_data(req: &Request) -> Option<String> {
 }
 
 enum Command {
+    Hello,
     Get,
+    Exists,
     Set,
     Delete,
     SetList,
@@ -90,6 +92,21 @@ enum Command {
     ConfOptions,
 }
 
+fn get_value_type(value: &str) -> StorageValue {
+    // use brute force
+    if let Ok(n) = value.parse::<i64>() {
+        StorageValue::Int(n)
+    } else if let Ok(n) = value.parse::<f64>() {
+        StorageValue::Float(n)
+    } else if value.to_lowercase().as_str() == "false" {
+        StorageValue::Bool(false)
+    } else if value.to_lowercase().as_str() == "true" {
+        StorageValue::Bool(true)
+    } else {
+        StorageValue::Text(value.to_string())
+    }
+}
+
 fn process_request(req: &[Request], storage: Arc<parking_lot::RwLock<Storage>>) -> Vec<u8> {
     if req.is_empty() {
         // return null array *-1\r\n
@@ -104,7 +121,9 @@ fn process_request(req: &[Request], storage: Arc<parking_lot::RwLock<Storage>>) 
 
     let cmd = match get_data(&req[i]) {
         Some(data) => match data.as_str() {
+            "HELLO" => Command::Hello,
             "GET" => Command::Get,
+            "EXISTS" => Command::Exists,
             "SET" => Command::Set,
             "DELETE" => Command::Delete,
             "GETLIST" => Command::GetList,
@@ -127,6 +146,11 @@ fn process_request(req: &[Request], storage: Arc<parking_lot::RwLock<Storage>>) 
 
     i += 1;
     match cmd {
+        // Client Handshake
+        // New RESP connections should begin the
+        // session by calling the HELLO command.
+        Command::Hello => bstring(Some("HELLO".to_string())),
+
         Command::Get => {
             if req.len() < 2 {
                 return simple_error("Missing key");
@@ -134,12 +158,25 @@ fn process_request(req: &[Request], storage: Arc<parking_lot::RwLock<Storage>>) 
             if let Some(key) = get_data(&req[i]) {
                 let key = storage.write().get_entry(&key);
                 if let Some(key) = key {
-                    return bstring(Some(key.value));
+                    return bstring(Some(key.value.to_string()));
                 }
                 bstring(None)
             } else {
                 bstring(None)
             }
+        }
+
+        Command::Exists => {
+            if req.len() < 2 {
+                return simple_error("Missing key");
+            }
+
+            if let Some(key) = get_data(&req[1]) {
+                let exists = storage.write().key_exists(&key);
+                return bstring(Some(exists.to_string()));
+            }
+
+            bstring(None)
         }
 
         Command::EntryStats => {
@@ -164,7 +201,8 @@ fn process_request(req: &[Request], storage: Arc<parking_lot::RwLock<Storage>>) 
             match get_data(&req[i]) {
                 Some(key) => match get_data(&req[i + 1]) {
                     Some(value) => {
-                        storage.write().insert_entry(key, value);
+                        let store_value = get_value_type(&value);
+                        storage.write().insert_entry(key, store_value);
                         bstring(Some("SUCCESS".to_string()))
                     }
                     None => simple_error("Missing value"),
@@ -192,7 +230,8 @@ fn process_request(req: &[Request], storage: Arc<parking_lot::RwLock<Storage>>) 
                     i += 1;
                     if let Some(value) = get_data(&req[i]) {
                         i += 1;
-                        map.insert(key, value);
+                        let store_value = get_value_type(&value);
+                        map.insert(key, store_value);
                     }
                 } else {
                     i += 2;
@@ -217,7 +256,8 @@ fn process_request(req: &[Request], storage: Arc<parking_lot::RwLock<Storage>>) 
             let mut result = Vec::new();
             for (_, entry) in entries {
                 if let Some(e) = entry {
-                    let v = String::from_utf8_lossy(&bstring(Some(e.value))).to_string();
+                    let v =
+                        String::from_utf8_lossy(&bstring(Some(e.value.to_string()))).to_string();
                     result.push(v);
                 } else {
                     let v = String::from_utf8_lossy(&bstring(None)).to_string();
@@ -328,7 +368,8 @@ fn process_request(req: &[Request], storage: Arc<parking_lot::RwLock<Storage>>) 
                                 Err(e) => return simple_error(&format!("Invalid ttl: {e:?}")),
                             };
                             let ttl = Duration::from_secs(ttl);
-                            storage.write().insert_with_ttl(key, value, ttl);
+                            let store_value = get_value_type(&value);
+                            storage.write().insert_with_ttl(key, store_value, ttl);
                             bstring(Some("SUCCESS".to_string()))
                         }
                         None => simple_error("Missing ttl"),

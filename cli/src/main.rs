@@ -1,14 +1,20 @@
 use std::io::{Read, Write, stdin, stdout};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream};
 
-use anyhow::Context;
+use anyhow::{Context, anyhow};
 use server_lib::parse_request;
 
 #[derive(PartialEq, Debug, Eq)]
 enum Command {
+    Hello,
     Get {
         key: String,
     },
+
+    Exists {
+        key: String,
+    },
+
     Set {
         key: String,
         value: String,
@@ -189,6 +195,11 @@ fn parse_line(line: &str) -> Command {
             Err(e) => Command::ParseError(format!("GET: {e}")),
         },
 
+        "EXISTS" => match parse_arg(&chars, &mut pointer, "key") {
+            Ok(key) => Command::Exists { key },
+            Err(e) => Command::ParseError(format!("EXISTS: {e}")),
+        },
+
         "SET" => match parse_arg(&chars, &mut pointer, "key") {
             Ok(key) => match parse_arg(&chars, &mut pointer, "value") {
                 Ok(value) => Command::Set { key, value },
@@ -332,12 +343,25 @@ fn serialize_request(command: &Command) -> Vec<u8> {
     // the command's name. Subsequent elements of the array are the arguments
     // for the command.
     match command {
+        Command::Hello => {
+            let arr = array(&[bstring("HELLO")]);
+            arr.as_bytes().to_vec()
+        }
+
         Command::Get { key } => {
             let v = [bstring("GET"), bstring(key)];
             let arr = array(&v);
 
             arr.as_bytes().to_vec()
         }
+
+        Command::Exists { key } => {
+            let v = [bstring("EXISTS"), bstring(key)];
+            let arr = array(&v);
+
+            arr.as_bytes().to_vec()
+        }
+
         Command::Set { key, value } => {
             let v = [bstring("SET"), bstring(key), bstring(value)];
             let arr = array(&v);
@@ -486,6 +510,34 @@ fn deserialize_response(resp: &[u8]) -> anyhow::Result<Vec<String>> {
         .collect())
 }
 
+fn handshake(mut stream: &TcpStream) -> Result<(), String> {
+    let cmd = serialize_request(&Command::Hello);
+    match stream.write_all(&cmd) {
+        Ok(_) => (),
+        Err(e) => return Err(e.to_string()),
+    }
+
+    let mut buffer = [0u8; 64];
+    match stream.read(&mut buffer) {
+        Ok(_) => (),
+        Err(e) => return Err(e.to_string()),
+    }
+
+    let res = match deserialize_response(&buffer) {
+        Ok(r) => r,
+        Err(e) => return Err(e.to_string()),
+    };
+
+    if res.is_empty() {
+        return Err("Handshake failed".to_string());
+    }
+
+    if res[0].as_str() == "HELLO" {
+        return Ok(());
+    }
+
+    Err("Unknown response".to_string())
+}
 fn help() {
     println!("USAGE: ");
     println!("  SET key<string> value<any>");
@@ -521,6 +573,12 @@ fn main() -> anyhow::Result<()> {
     let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 7878));
     let mut stream = TcpStream::connect(addr).context("connect to server")?;
     let mut stdout = stdout();
+    match handshake(&stream) {
+        Ok(()) => (),
+        Err(e) => {
+            return Err(anyhow!(e));
+        }
+    }
 
     loop {
         line.clear();
@@ -564,6 +622,8 @@ fn main() -> anyhow::Result<()> {
         if resp.is_empty() {
             let resp = "NULL";
             println!("{resp}");
+        } else if resp.len() == 1 {
+            println!("{}", resp[0]);
         } else {
             println!("{resp:?}");
         }

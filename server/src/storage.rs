@@ -21,9 +21,42 @@ pub struct Storage {
     pub stats: StorageStats,
 }
 
+#[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub enum StorageValue {
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Text(String),
+}
+
+impl Display for StorageValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StorageValue::Int(i) => write!(f, "{i}"),
+            StorageValue::Float(fl) => write!(f, "{fl}"),
+            StorageValue::Bool(b) => write!(f, "{b}"),
+            StorageValue::Text(t) => write!(f, "{t}"),
+        }
+    }
+}
+
+impl StorageValue {
+    fn size_in_bytes(&self) -> usize {
+        match self {
+            StorageValue::Int(_) => size_of_val(self),
+            StorageValue::Float(_) => size_of_val(self),
+            StorageValue::Bool(_) => size_of_val(self),
+            // size_of_val(self) only captures the size of the
+            // String struct (usually 24 bytes on 64-bit systems).
+            // The actual bytes on the heap are in s.capacity()
+            StorageValue::Text(t) => size_of_val(self) + t.capacity(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageEntry {
-    pub value: String,
+    pub value: StorageValue,
     pub created_at: SystemTime,
     pub last_accessed: SystemTime,
     pub access_count: usize,
@@ -96,6 +129,7 @@ impl Display for StorageOptions {
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct StorageStats {
+    pub total_entries: usize,
     pub hits: usize,
     pub misses: usize,
     pub evictions: usize,
@@ -107,8 +141,8 @@ impl Display for StorageStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Hits: {}, Misses: {}, Evictions: {}, Expired Removals: {}",
-            self.hits, self.misses, self.evictions, self.expired_removals
+            "Total Entries: {}, Hits: {}, Misses: {}, Evictions: {}, Expired Removals: {}",
+            self.total_entries, self.hits, self.misses, self.evictions, self.expired_removals
         )
     }
 }
@@ -173,6 +207,10 @@ impl Storage {
         None
     }
 
+    pub fn key_exists(&mut self, key: &str) -> bool {
+        self.get_entry(key).is_some()
+    }
+
     // batch operations
     pub fn get_entries(&mut self, keys: &[String]) -> Vec<(String, Option<StorageEntry>)> {
         let mut result = Vec::new();
@@ -183,7 +221,7 @@ impl Storage {
         result
     }
 
-    pub fn insert_entries(&mut self, entries: HashMap<String, String>) {
+    pub fn insert_entries(&mut self, entries: HashMap<String, StorageValue>) {
         for (key, value) in entries {
             self.insert_entry(key, value);
         }
@@ -195,13 +233,13 @@ impl Storage {
         }
     }
 
-    pub fn insert_entry(&mut self, key: String, value: String) {
+    pub fn insert_entry(&mut self, key: String, value: StorageValue) {
         if self.is_full() {
             self.evict_entries();
         }
 
         let timestamp = SystemTime::now();
-        let entry_size = value.len();
+        let entry_size = value.size_in_bytes();
         let entry = StorageEntry {
             value,
             created_at: timestamp,
@@ -218,8 +256,8 @@ impl Storage {
         self.store.remove(key);
     }
 
-    pub fn insert_with_ttl(&mut self, key: String, value: String, ttl: Duration) {
-        let entry_size = value.len();
+    pub fn insert_with_ttl(&mut self, key: String, value: StorageValue, ttl: Duration) {
+        let entry_size = value.size_in_bytes();
         let now = SystemTime::now();
 
         let entry = StorageEntry {
@@ -347,6 +385,7 @@ impl Storage {
 
     pub fn get_stats(&self) -> StorageStats {
         StorageStats {
+            total_entries: self.stats.total_entries,
             hits: self.stats.hits,
             misses: self.stats.misses,
             evictions: self.stats.evictions,
@@ -423,7 +462,7 @@ impl Storage {
 mod tests {
     use std::{collections::HashMap, thread, time::Duration};
 
-    use crate::{ConfigEntry, EvictionPolicy};
+    use crate::{ConfigEntry, EvictionPolicy, StorageValue};
 
     use super::{Storage, StorageOptions};
 
@@ -453,18 +492,20 @@ mod tests {
     #[test]
     fn test_insert_and_get_key() {
         let mut storage = Storage::default();
-        storage.insert_entry("test_key".to_string(), "test_value".to_string());
+        let v = StorageValue::Text("test value".to_string());
+        storage.insert_entry("test_key".to_string(), v.clone());
 
         let entry = storage.get_entry("test_key");
         assert!(entry.is_some());
-        assert_eq!(entry.unwrap().value, "test_value");
+        assert_eq!(entry.unwrap().value, v);
     }
 
     // Test removing keys
     #[test]
     fn test_remove_entry() {
         let mut storage = Storage::default();
-        storage.insert_entry("test_key".to_string(), "test_value".to_string());
+        let v = StorageValue::Text("test value".to_string());
+        storage.insert_entry("test_key".to_string(), v);
 
         assert!(storage.get_entry("test_key").is_some());
 
@@ -485,17 +526,21 @@ mod tests {
     fn test_capacity_enforcement() {
         let options = StorageOptions::new(Duration::from_secs(3600), 3, &EvictionPolicy::Oldest);
         let mut storage = Storage::new(options);
+        let v1 = StorageValue::Text("value1".to_string());
+        let v2 = StorageValue::Text("value2".to_string());
+        let v3 = StorageValue::Text("value3".to_string());
+        let v4 = StorageValue::Text("value4".to_string());
 
         // Insert up to capacity
-        storage.insert_entry("key1".to_string(), "value1".to_string());
-        storage.insert_entry("key2".to_string(), "value2".to_string());
-        storage.insert_entry("key3".to_string(), "value3".to_string());
+        storage.insert_entry("key1".to_string(), v1);
+        storage.insert_entry("key2".to_string(), v2);
+        storage.insert_entry("key3".to_string(), v3);
 
         assert_eq!(storage.store.len(), 3);
         assert!(storage.is_full());
 
         // Insert one more - oldest should be removed
-        storage.insert_entry("key4".to_string(), "value4".to_string());
+        storage.insert_entry("key4".to_string(), v4);
 
         assert_eq!(storage.store.len(), 3);
         assert!(storage.get_entry("key1").is_none());
@@ -509,8 +554,10 @@ mod tests {
     fn test_ttl_expiration() {
         let options = StorageOptions::new(Duration::from_millis(100), 10, &EvictionPolicy::Oldest);
         let mut storage = Storage::new(options);
+        let v1 = StorageValue::Text("value1".to_string());
+        let v2 = StorageValue::Text("value2".to_string());
 
-        storage.insert_entry("key1".to_string(), "value1".to_string());
+        storage.insert_entry("key1".to_string(), v1);
 
         // Verify key exists
         assert!(storage.get_entry("key1").is_some());
@@ -519,7 +566,7 @@ mod tests {
         thread::sleep(Duration::from_millis(150));
 
         // Insert another key to trigger remove_expired()
-        storage.insert_entry("key2".to_string(), "value2".to_string());
+        storage.insert_entry("key2".to_string(), v2);
 
         // Verify expired key is gone
         assert!(storage.get_entry("key1").is_none());
@@ -531,15 +578,18 @@ mod tests {
     fn test_multiple_expired_keys() {
         let options = StorageOptions::new(Duration::from_millis(100), 10, &EvictionPolicy::Oldest);
         let mut storage = Storage::new(options);
+        let v1 = StorageValue::Text("value1".to_string());
+        let v2 = StorageValue::Text("value2".to_string());
+        let v3 = StorageValue::Text("value3".to_string());
 
-        storage.insert_entry("key1".to_string(), "value1".to_string());
-        storage.insert_entry("key2".to_string(), "value2".to_string());
+        storage.insert_entry("key1".to_string(), v1);
+        storage.insert_entry("key2".to_string(), v2);
 
         // Wait for TTL to expire
         thread::sleep(Duration::from_millis(150));
 
         // Insert a new key to trigger remove_expired()
-        storage.insert_entry("key3".to_string(), "value3".to_string());
+        storage.insert_entry("key3".to_string(), v3);
 
         // Verify both expired keys are gone
         assert!(storage.get_entry("key1").is_none());
@@ -553,9 +603,11 @@ mod tests {
     fn test_remove_expired_directly() {
         let options = StorageOptions::new(Duration::from_millis(100), 5, &EvictionPolicy::Oldest);
         let mut storage = Storage::new(options);
+        let v1 = StorageValue::Text("value1".to_string());
+        let v2 = StorageValue::Text("value2".to_string());
 
-        storage.insert_entry("key1".to_string(), "value1".to_string());
-        storage.insert_entry("key2".to_string(), "value2".to_string());
+        storage.insert_entry("key1".to_string(), v1);
+        storage.insert_entry("key2".to_string(), v2);
 
         assert_eq!(storage.store.len(), 2);
 
@@ -573,18 +625,23 @@ mod tests {
     fn test_remove_oldest_key() {
         let options = StorageOptions::new(Duration::from_secs(3600), 3, &EvictionPolicy::Oldest);
         let mut storage = Storage::new(options);
+        let v1 = StorageValue::Text("value1".to_string());
+        let v2 = StorageValue::Text("value2".to_string());
+        let v3 = StorageValue::Text("value3".to_string());
+        let v4 = StorageValue::Text("value4".to_string());
 
-        storage.insert_entry("key1".to_string(), "value1".to_string());
+        storage.insert_entry("key1".to_string(), v1);
+
         thread::sleep(Duration::from_millis(10)); // Ensure different timestamps
-        storage.insert_entry("key2".to_string(), "value2".to_string());
+        storage.insert_entry("key2".to_string(), v2);
         thread::sleep(Duration::from_millis(10));
-        storage.insert_entry("key3".to_string(), "value3".to_string());
+        storage.insert_entry("key3".to_string(), v3);
 
         assert_eq!(storage.store.len(), 3);
 
         // Insert a new key - should remove the oldest (key1)
         thread::sleep(Duration::from_millis(10));
-        storage.insert_entry("key4".to_string(), "value4".to_string());
+        storage.insert_entry("key4".to_string(), v4);
 
         assert_eq!(storage.store.len(), 3);
         assert!(storage.get_entry("key1").is_none());
@@ -598,18 +655,23 @@ mod tests {
     fn test_update_existing_key() {
         let mut storage = Storage::default();
 
-        storage.insert_entry("key1".to_string(), "value1".to_string());
+        let v1 = StorageValue::Text("value1".to_string());
+        let v2 = StorageValue::Text("updated value".to_string());
+        storage.insert_entry("key1".to_string(), v1);
         let original_entry = storage.get_entry("key1").unwrap();
 
         // Wait a moment to ensure timestamp is different
         thread::sleep(Duration::from_millis(10));
 
         // Update the key
-        storage.insert_entry("key1".to_string(), "updated_value".to_string());
+        storage.insert_entry("key1".to_string(), v2);
         let updated_entry = storage.get_entry("key1").unwrap();
 
         assert_eq!(storage.store.len(), 1);
-        assert_eq!(updated_entry.value, "updated_value");
+        assert_eq!(
+            updated_entry.value,
+            StorageValue::Text("updated_value".to_string())
+        );
         assert!(updated_entry.created_at > original_entry.created_at);
     }
 
@@ -617,10 +679,11 @@ mod tests {
     fn test_insert_with_custom_ttl() {
         let mut storage = Storage::default();
         let ttl = Duration::from_secs(5);
-        storage.insert_with_ttl("custom_key".to_string(), "custom_val".to_string(), ttl);
+        let v1 = StorageValue::Text("custom val".to_string());
+        storage.insert_with_ttl("custom_key".to_string(), v1, ttl);
 
         let entry = storage.get_entry("custom_key").unwrap();
-        assert_eq!(entry.value, "custom_val");
+        assert_eq!(entry.value, StorageValue::Text("custom_val".to_string()));
         assert_eq!(entry.ttl, ttl);
     }
 
@@ -629,7 +692,8 @@ mod tests {
         let mut storage = Storage::default();
         let original_ttl = Duration::from_secs(5);
         let extension = 10;
-        storage.insert_with_ttl("key".to_string(), "val".to_string(), original_ttl);
+        let v1 = StorageValue::Text("val".to_string());
+        storage.insert_with_ttl("key".to_string(), v1, original_ttl);
 
         let result = storage.extend_ttl("key", extension);
         assert!(result.is_ok());
@@ -645,7 +709,8 @@ mod tests {
         let mut storage = Storage::default();
         let original_ttl = Duration::from_secs(5);
         let extension = -10; // would overflow
-        storage.insert_with_ttl("key".to_string(), "val".to_string(), original_ttl);
+        let v1 = StorageValue::Text("val".to_string());
+        storage.insert_with_ttl("key".to_string(), v1, original_ttl);
 
         let result = storage.extend_ttl("key", extension);
         assert!(result.is_err());
@@ -662,16 +727,25 @@ mod tests {
     #[test]
     fn test_get_entries_batch() {
         let mut storage = Storage::default();
-        storage.insert_entry("key1".to_string(), "val1".to_string());
-        storage.insert_entry("key2".to_string(), "val2".to_string());
+        let v1 = StorageValue::Text("value1".to_string());
+        let v2 = StorageValue::Text("value2".to_string());
+
+        storage.insert_entry("key1".to_string(), v1);
+        storage.insert_entry("key2".to_string(), v2);
 
         let result = storage.get_entries(&[
             "key1".to_string(),
             "key2".to_string(),
             "missing".to_string(),
         ]);
-        assert_eq!(result[0].1.as_ref().unwrap().value, "val1".to_string());
-        assert_eq!(result[1].1.as_ref().unwrap().value, "val2".to_string());
+        assert_eq!(
+            result[0].1.as_ref().unwrap().value,
+            StorageValue::Text("val1".to_string())
+        );
+        assert_eq!(
+            result[1].1.as_ref().unwrap().value,
+            StorageValue::Text("val2".to_string())
+        );
         assert!(result[2].1.is_none())
     }
 
@@ -679,8 +753,10 @@ mod tests {
     fn test_insert_and_remove_entries_batch() {
         let mut storage = Storage::default();
         let mut batch = HashMap::new();
-        batch.insert("k1".to_string(), "v1".to_string());
-        batch.insert("k2".to_string(), "v2".to_string());
+        let v1 = StorageValue::Text("value1".to_string());
+        let v2 = StorageValue::Text("value2".to_string());
+        batch.insert("k1".to_string(), v1);
+        batch.insert("k2".to_string(), v2);
 
         storage.insert_entries(batch);
         assert!(storage.get_entry("k1").is_some());
@@ -696,11 +772,15 @@ mod tests {
         let options = StorageOptions::new(Duration::from_secs(10), 2, &EvictionPolicy::Oldest);
         let mut storage = Storage::new(options);
         storage.set_config_entry(&ConfigEntry::EvictPolicy(EvictionPolicy::LRU));
+        let v1 = StorageValue::Text("value1".to_string());
+        let v2 = StorageValue::Text("value2".to_string());
+        let v3 = StorageValue::Text("value3".to_string());
 
-        storage.insert_entry("k1".to_string(), "v1".to_string());
-        storage.insert_entry("k2".to_string(), "v2".to_string());
+        storage.insert_entry("key1".to_string(), v1);
+        storage.insert_entry("key2".to_string(), v2);
+
         storage.get_entry("k1"); // Make k1 recently used
-        storage.insert_entry("k3".to_string(), "v3".to_string());
+        storage.insert_entry("key3".to_string(), v3);
 
         assert!(storage.get_entry("k2").is_none()); // Least recently used
     }
@@ -711,11 +791,15 @@ mod tests {
         let mut storage = Storage::new(options);
         storage.set_config_entry(&ConfigEntry::EvictPolicy(EvictionPolicy::LFU));
 
-        storage.insert_entry("k1".to_string(), "v1".to_string());
-        storage.insert_entry("k2".to_string(), "v2".to_string());
+        let v1 = StorageValue::Text("value1".to_string());
+        let v2 = StorageValue::Text("value2".to_string());
+        let v3 = StorageValue::Text("value3".to_string());
+
+        storage.insert_entry("key1".to_string(), v1);
+        storage.insert_entry("key2".to_string(), v2);
         storage.get_entry("k1"); // Increase access count for k1
         storage.get_entry("k1");
-        storage.insert_entry("k3".to_string(), "v3".to_string());
+        storage.insert_entry("key3".to_string(), v3);
 
         assert!(storage.get_entry("k2").is_none()); // Least frequently used
     }
@@ -725,10 +809,13 @@ mod tests {
         let options = StorageOptions::new(Duration::from_secs(10), 2, &EvictionPolicy::Oldest);
         let mut storage = Storage::new(options);
         storage.set_config_entry(&ConfigEntry::EvictPolicy(EvictionPolicy::SizeAware));
+        let v1 = StorageValue::Text("v".to_string());
+        let v2 = StorageValue::Text("valuevalue".to_string());
+        let v3 = StorageValue::Text("x".to_string());
 
-        storage.insert_entry("small".to_string(), "v".to_string());
-        storage.insert_entry("large".to_string(), "valuevalue".to_string());
-        storage.insert_entry("extra".to_string(), "x".to_string());
+        storage.insert_entry("small".to_string(), v1);
+        storage.insert_entry("large".to_string(), v2);
+        storage.insert_entry("extra".to_string(), v3);
 
         // Smallest value ("v") should be evicted
         assert!(storage.get_entry("small").is_none());
@@ -737,7 +824,8 @@ mod tests {
     #[test]
     fn test_reset_stats() {
         let mut storage = Storage::default();
-        storage.insert_entry("k1".to_string(), "v1".to_string());
+        let v1 = StorageValue::Text("value1".to_string());
+        storage.insert_entry("key1".to_string(), v1);
         storage.get_entry("k1");
         storage.get_entry("missing");
 

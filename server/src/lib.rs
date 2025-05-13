@@ -5,9 +5,10 @@ use std::{
     thread,
 };
 
-#[allow(dead_code)]
 use anyhow::{Context, anyhow};
 
+#[allow(dead_code)]
+mod resp3;
 mod storage;
 
 pub use storage::*;
@@ -62,7 +63,6 @@ fn parse_serrors(data: &[u8]) -> (Option<Vec<u8>>, usize) {
 }
 
 // :[<+|->]<value>\r\n
-//
 // The colon (:) as the first byte.
 // An optional plus (+) or minus (-) as the sign.
 // One or more decimal digits (0..9) as the integer's unsigned, base-10 value.
