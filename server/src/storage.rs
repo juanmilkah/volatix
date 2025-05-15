@@ -119,7 +119,7 @@ impl Display for StorageOptions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "TTL: {}, MAXCAP: {}, EVICTPOLICY: {}",
+            "GLOBALTTL: {}, MAXCAP: {}, EVICTPOLICY: {}",
             self.ttl.as_secs(),
             self.max_capacity,
             self.eviction_policy
@@ -398,7 +398,7 @@ impl Storage {
     }
 
     pub fn get_config_entry(&self, key: &str) -> Option<ConfigEntry> {
-        match key {
+        match key.to_uppercase().as_str() {
             "EVICTPOLICY" => Some(ConfigEntry::EvictPolicy(self.options.eviction_policy)),
             "MAXCAP" => Some(ConfigEntry::MaxCapacity(self.options.max_capacity)),
             "GLOBALTTL" => Some(ConfigEntry::GlobalTtl(self.options.ttl.as_secs())),
@@ -670,7 +670,7 @@ mod tests {
         assert_eq!(storage.store.len(), 1);
         assert_eq!(
             updated_entry.value,
-            StorageValue::Text("updated_value".to_string())
+            StorageValue::Text("updated value".to_string())
         );
         assert!(updated_entry.created_at > original_entry.created_at);
     }
@@ -683,7 +683,7 @@ mod tests {
         storage.insert_with_ttl("custom_key".to_string(), v1, ttl);
 
         let entry = storage.get_entry("custom_key").unwrap();
-        assert_eq!(entry.value, StorageValue::Text("custom_val".to_string()));
+        assert_eq!(entry.value, StorageValue::Text("custom val".to_string()));
         assert_eq!(entry.ttl, ttl);
     }
 
@@ -740,11 +740,11 @@ mod tests {
         ]);
         assert_eq!(
             result[0].1.as_ref().unwrap().value,
-            StorageValue::Text("val1".to_string())
+            StorageValue::Text("value1".to_string())
         );
         assert_eq!(
             result[1].1.as_ref().unwrap().value,
-            StorageValue::Text("val2".to_string())
+            StorageValue::Text("value2".to_string())
         );
         assert!(result[2].1.is_none())
     }
@@ -825,7 +825,7 @@ mod tests {
     fn test_reset_stats() {
         let mut storage = Storage::default();
         let v1 = StorageValue::Text("value1".to_string());
-        storage.insert_entry("key1".to_string(), v1);
+        storage.insert_entry("k1".to_string(), v1);
         storage.get_entry("k1");
         storage.get_entry("missing");
 

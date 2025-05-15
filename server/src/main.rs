@@ -8,72 +8,12 @@ use std::{
 };
 
 use server_lib::{
-    ConfigEntry, DataType, EvictionPolicy, Request, Storage, StorageEntry, StorageOptions,
-    StorageValue, ThreadPool, parse_request,
+    ConfigEntry, EvictionPolicy, RequestType, Storage, StorageOptions, StorageValue, ThreadPool,
+    batch_entries_response, boolean_response, bulk_error_response, bulk_string_response,
+    integer_response, null_response, parse_request,
 };
 
-fn null_array() -> Vec<u8> {
-    b"*-1\r\n".to_vec()
-}
-
-// -Error message\r\n
-fn simple_error(s: &str) -> Vec<u8> {
-    let mut err = String::new();
-    err.push('-');
-    err.push_str(s);
-    err.push_str("\r\n");
-
-    err.as_bytes().to_vec()
-}
-
-fn bstring(s: Option<String>) -> Vec<u8> {
-    match s {
-        Some(rsp) => {
-            let mut s = String::new();
-            s.push('$');
-            let len = rsp.len();
-            s.push_str(&len.to_string());
-            s.push_str("\r\n");
-            s.push_str(&rsp);
-            s.push_str("\r\n");
-
-            s.as_bytes().to_vec()
-        }
-        None => {
-            // null $-1\r\n
-            b"$-1\r\n".to_vec()
-        }
-    }
-}
-
-// *<number-of-elements>\r\n<element-1>...<element-n>
-struct Array(String);
-
-impl Array {
-    fn new(elems: &[String]) -> Self {
-        let mut arr = String::new();
-        let terminator = "\r\n";
-
-        arr.push('*');
-        arr.push_str(&elems.len().to_string());
-        arr.push_str(terminator);
-
-        for s in elems {
-            arr.push_str(s);
-        }
-
-        Array(arr)
-    }
-}
-
-fn get_data(req: &Request) -> Option<String> {
-    req.content
-        .as_ref()
-        .map(|content| String::from_utf8_lossy(content).to_string())
-}
-
 enum Command {
-    Hello,
     Get,
     Exists,
     Set,
@@ -81,15 +21,12 @@ enum Command {
     SetList,
     GetList,
     DeleteList,
-    GetStats,
-    ResetStats,
     ConfSet,
     ConfGet,
     ExtendTtl,
     SetwTtl,
     GetTtl,
     EntryStats,
-    ConfOptions,
 }
 
 fn get_value_type(value: &str) -> StorageValue {
@@ -107,324 +44,446 @@ fn get_value_type(value: &str) -> StorageValue {
     }
 }
 
-fn process_request(req: &[Request], storage: Arc<parking_lot::RwLock<Storage>>) -> Vec<u8> {
-    if req.is_empty() {
-        // return null array *-1\r\n
-        return null_array();
-    }
-
-    let mut i = 0;
-    match req[i].data_type {
-        DataType::BulkStrings => {}
-        _ => return simple_error("Invalid command"),
-    };
-
-    let cmd = match get_data(&req[i]) {
-        Some(data) => match data.as_str() {
-            "HELLO" => Command::Hello,
-            "GET" => Command::Get,
-            "EXISTS" => Command::Exists,
-            "SET" => Command::Set,
-            "DELETE" => Command::Delete,
-            "GETLIST" => Command::GetList,
-            "SETLIST" => Command::SetList,
-            "DELETELIST" => Command::DeleteList,
-            "GETSTATS" => Command::GetStats,
-            "RESETSTATS" => Command::ResetStats,
-            "SETWTTL" => Command::SetwTtl,
-            "GETTTL" => Command::GetTtl,
-            "EXTENDTTL" => Command::ExtendTtl,
-            "CONFGET" => Command::ConfGet,
-            "CONFSET" => Command::ConfSet,
-            "ENTRYSTATS" => Command::EntryStats,
-            "CONFOPTIONS" => Command::ConfOptions,
-
-            _ => return simple_error(&format!("unknown command: {data:?}")),
+fn config_entry(key: &str, value: &StorageValue) -> Result<ConfigEntry, String> {
+    match key {
+        "MAXCAP" => match value {
+            StorageValue::Int(n) => {
+                if *n < 0 {
+                    return Err("MAXCAP value less than 0".to_string());
+                }
+                Ok(ConfigEntry::MaxCapacity(*n as u64))
+            }
+            _ => Err("Invalid MAXCAP value".to_string()),
         },
-        None => return bstring(None),
-    };
-
-    i += 1;
-    match cmd {
-        // Client Handshake
-        // New RESP connections should begin the
-        // session by calling the HELLO command.
-        Command::Hello => bstring(Some("HELLO".to_string())),
-
-        Command::Get => {
-            if req.len() < 2 {
-                return simple_error("Missing key");
-            }
-            if let Some(key) = get_data(&req[i]) {
-                let key = storage.write().get_entry(&key);
-                if let Some(key) = key {
-                    return bstring(Some(key.value.to_string()));
+        "GLOBALTTL" => match value {
+            StorageValue::Int(n) => {
+                if *n < 0 {
+                    return Err("GLOBALTTL value less than 0".to_string());
                 }
-                bstring(None)
-            } else {
-                bstring(None)
+                Ok(ConfigEntry::GlobalTtl(*n as u64))
             }
-        }
+            _ => Err("Invalid GLOBALTTL value".to_string()),
+        },
+        "EVICTPOLICY" => match value {
+            StorageValue::Text(t) => match t.to_uppercase().as_str() {
+                "OLDEST" => Ok(ConfigEntry::EvictPolicy(EvictionPolicy::Oldest)),
+                "LFU" => Ok(ConfigEntry::EvictPolicy(EvictionPolicy::LFU)),
+                "LRU" => Ok(ConfigEntry::EvictPolicy(EvictionPolicy::LRU)),
+                "SIZEAWARE" => Ok(ConfigEntry::EvictPolicy(EvictionPolicy::SizeAware)),
+                _ => Err("Invalid EVICTPOLICY value".to_string()),
+            },
+            _ => Err("Invalid EVICTPOLICY value".to_string()),
+        },
 
-        Command::Exists => {
-            if req.len() < 2 {
-                return simple_error("Missing key");
-            }
+        _ => Err("Invalid CONFSET key".to_string()),
+    }
+}
 
-            if let Some(key) = get_data(&req[1]) {
-                let exists = storage.write().key_exists(&key);
-                return bstring(Some(exists.to_string()));
-            }
-
-            bstring(None)
-        }
-
-        Command::EntryStats => {
-            if req.len() < 2 {
-                return simple_error("Missing key");
-            }
-            if let Some(key) = get_data(&req[i]) {
-                let entry = storage.write().get_entry(&key);
-                if let Some(e) = entry {
-                    return bstring(Some(e.to_string()));
+// The client sends requests in three distinct ways
+// For single commands -> a BulkString
+//    HELLO  -> Handshake command
+//    CONFOPTIONS
+// For normal commands -> an Array of RequestTypes
+//    [SET key value]
+//    [GET key]
+// For list commands   -> An nested Array of RequestsTypes
+//    [SETLIST [key,value], [key, value]]
+//    [GETLIST [key, key, key, ..]]
+//    [DELETELIST [key, key, key]]
+fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>) -> Vec<u8> {
+    match req {
+        RequestType::BulkString { data } => {
+            let cmd = String::from_utf8_lossy(data).to_string();
+            match cmd.to_uppercase().as_str() {
+                // Client Handshake
+                // New RESP connections should begin the
+                // session by calling the HELLO command.
+                "HELLO" => bulk_string_response(Some("HELLO")),
+                "GETSTATS" => {
+                    let stats = storage.read().get_stats();
+                    bulk_string_response(Some(&stats.to_string()))
                 }
-                bstring(None)
-            } else {
-                bstring(None)
+                "RESETSTATS" => {
+                    storage.write().reset_stats();
+
+                    bulk_string_response(Some("SUCCESS"))
+                }
+                "CONFOPTIONS" => {
+                    let options = storage.read().get_options();
+
+                    bulk_string_response(Some(&options.to_string()))
+                }
+                _ => unreachable!(),
             }
         }
-        Command::Set => {
-            if req.len() < 3 {
-                return simple_error("Missing values");
-            }
 
-            match get_data(&req[i]) {
-                Some(key) => match get_data(&req[i + 1]) {
-                    Some(value) => {
-                        let store_value = get_value_type(&value);
-                        storage.write().insert_entry(key, store_value);
-                        bstring(Some("SUCCESS".to_string()))
+        RequestType::Array { children } => {
+            if children.is_empty() {
+                return null_response();
+            }
+            let mut i = 0;
+
+            let command = match &children[i] {
+                RequestType::BulkString { data } => {
+                    let cmd = String::from_utf8_lossy(data).to_string();
+                    match cmd.to_uppercase().as_str() {
+                        "GET" => Command::Get,
+                        "SET" => Command::Set,
+                        "DELETE" => Command::Delete,
+                        "EXISTS" => Command::Exists,
+                        "CONFGET" => Command::ConfGet,
+                        "CONFSET" => Command::ConfSet,
+                        "ENTRYSTATS" => Command::EntryStats,
+                        "GETTTL" => Command::GetTtl,
+                        "EXTENDTTL" => Command::ExtendTtl,
+                        "SETWTTL" => Command::SetwTtl,
+                        "DELETELIST" => Command::DeleteList,
+                        "GETLIST" => Command::GetList,
+                        "SETLIST" => Command::SetList,
+                        _ => unreachable!(),
                     }
-                    None => simple_error("Missing value"),
-                },
-                None => simple_error("Missing key"),
-            }
-        }
-        Command::Delete => {
-            if req.len() < 2 {
-                return simple_error("Invalid values");
-            }
-
-            match get_data(&req[i]) {
-                Some(key) => {
-                    storage.write().remove_entry(&key);
-                    bstring(Some("SUCCESS".to_string()))
                 }
-                None => simple_error("Missing key"),
-            }
-        }
-        Command::SetList => {
-            let mut map = HashMap::new();
-            while i < req.len() {
-                if let Some(key) = get_data(&req[i]) {
+                _ => unreachable!(),
+            };
+
+            match command {
+                Command::Get => {
+                    if children.len() < 2 {
+                        return bulk_error_response("Command missing some arguments");
+                    }
+
                     i += 1;
-                    if let Some(value) = get_data(&req[i]) {
-                        i += 1;
-                        let store_value = get_value_type(&value);
-                        map.insert(key, store_value);
-                    }
-                } else {
-                    i += 2;
-                }
-            }
+                    match &children[i] {
+                        RequestType::BulkString { data } => {
+                            let key = String::from_utf8_lossy(data).to_string();
+                            let entry = storage.write().get_entry(&key);
 
-            storage.write().insert_entries(map);
-
-            bstring(Some("SUCCESS".to_string()))
-        }
-        Command::GetList => {
-            let mut keys = Vec::new();
-            while i < req.len() {
-                if let Some(key) = get_data(&req[i]) {
-                    keys.push(key);
-                }
-                i += 1;
-            }
-
-            let entries: Vec<(String, Option<StorageEntry>)> = storage.write().get_entries(&keys);
-
-            let mut result = Vec::new();
-            for (_, entry) in entries {
-                if let Some(e) = entry {
-                    let v =
-                        String::from_utf8_lossy(&bstring(Some(e.value.to_string()))).to_string();
-                    result.push(v);
-                } else {
-                    let v = String::from_utf8_lossy(&bstring(None)).to_string();
-                    result.push(v);
-                }
-            }
-
-            let arr = Array::new(&result);
-            arr.0.as_bytes().to_vec()
-        }
-        Command::DeleteList => {
-            let mut keys = Vec::new();
-            while i < req.len() {
-                if let Some(key) = get_data(&req[i]) {
-                    keys.push(key);
-                }
-                i += 1;
-            }
-
-            storage.write().remove_entries(&keys);
-
-            bstring(Some("SUCCESS".to_string()))
-        }
-
-        Command::ConfSet => {
-            if req.len() < 3 {
-                return simple_error("Missing values");
-            }
-
-            match get_data(&req[i]) {
-                Some(key) => match get_data(&req[i + 1]) {
-                    Some(value) => {
-                        let conf = match key.to_uppercase().as_str() {
-                            "MAXCAP" => {
-                                let v = match value.parse::<u64>() {
-                                    Ok(v) => v,
-                                    Err(_) => return simple_error("invalid MAXCAP value"),
-                                };
-                                ConfigEntry::MaxCapacity(v)
+                            match entry {
+                                Some(e) => bulk_string_response(Some(&e.value.to_string())),
+                                None => null_response(),
                             }
-                            "GLOBALTTL" => {
-                                let v = match value.parse::<u64>() {
-                                    Ok(v) => v,
-                                    Err(_) => return simple_error("invalid GLOBALTTL value"),
-                                };
-                                ConfigEntry::GlobalTtl(v)
-                            }
-                            "EVICTPOLICY" => {
-                                let v = match value.to_uppercase().as_str() {
-                                    "OLDEST" => EvictionPolicy::Oldest,
-                                    "LFU" => EvictionPolicy::LFU,
-                                    "LRU" => EvictionPolicy::LRU,
-                                    "SIZEAWARE" => EvictionPolicy::SizeAware,
-                                    _ => return simple_error("Invalid EVICTPOLICY"),
-                                };
-
-                                ConfigEntry::EvictPolicy(v)
-                            }
-                            _ => return simple_error("Invalid config key"),
-                        };
-                        storage.write().set_config_entry(&conf);
-                        bstring(Some("SUCCESS".to_string()))
-                    }
-                    None => simple_error("Missing value"),
-                },
-                None => simple_error("Missing key"),
-            }
-        }
-
-        Command::ConfGet => {
-            if req.len() < 2 {
-                return simple_error("Missing key");
-            }
-            if let Some(key) = get_data(&req[i]) {
-                let entry = storage.write().get_config_entry(&key.to_uppercase());
-                if let Some(entry) = entry {
-                    bstring(Some(entry.to_string()))
-                } else {
-                    bstring(None)
-                }
-            } else {
-                bstring(None)
-            }
-        }
-
-        Command::ResetStats => {
-            storage.write().reset_stats();
-
-            bstring(Some("SUCCESS".to_string()))
-        }
-
-        Command::GetStats => {
-            let stats = storage.write().get_stats();
-            bstring(Some(stats.to_string()))
-        }
-
-        Command::SetwTtl => {
-            if req.len() < 4 {
-                return simple_error("Missing values");
-            }
-
-            match get_data(&req[i]) {
-                Some(key) => match get_data(&req[i + 1]) {
-                    Some(value) => match get_data(&req[i + 2]) {
-                        Some(ttl) => {
-                            let ttl = match ttl.parse::<u64>() {
-                                Ok(v) => v,
-                                Err(e) => return simple_error(&format!("Invalid ttl: {e:?}")),
-                            };
-                            let ttl = Duration::from_secs(ttl);
-                            let store_value = get_value_type(&value);
-                            storage.write().insert_with_ttl(key, store_value, ttl);
-                            bstring(Some("SUCCESS".to_string()))
                         }
-                        None => simple_error("Missing ttl"),
-                    },
-                    None => simple_error("Missing value"),
-                },
-                None => simple_error("Missing key"),
-            }
-        }
+                        _ => bulk_error_response("Invalid request type for GET key"),
+                    }
+                }
+                Command::Exists => {
+                    if children.len() < 2 {
+                        return bulk_error_response("Command missing some arguments");
+                    }
 
-        Command::ExtendTtl => {
-            if req.len() < 3 {
-                return simple_error("Missing values");
-            }
+                    i += 1;
+                    match &children[i] {
+                        RequestType::BulkString { data } => {
+                            let key = String::from_utf8_lossy(data).to_string();
+                            let exists = storage.write().key_exists(&key);
+                            boolean_response(exists)
+                        }
+                        _ => bulk_error_response("Invalid request type for EXISTS key"),
+                    }
+                }
+                Command::Set => {
+                    if children.len() < 3 {
+                        return bulk_error_response("Command missing some arguments");
+                    }
+                    i += 1;
+                    match &children[i] {
+                        RequestType::BulkString { data } => {
+                            let key = String::from_utf8_lossy(data).to_string();
+                            i += 1;
+                            match &children[i] {
+                                RequestType::BulkString { data } => {
+                                    let entry_value = String::from_utf8_lossy(data).to_string();
+                                    let entry_value = get_value_type(&entry_value);
+                                    storage.write().insert_entry(key, entry_value);
 
-            match get_data(&req[i]) {
-                Some(key) => match get_data(&req[i + 1]) {
-                    Some(addition_ttl) => {
-                        let ttl = match addition_ttl.parse::<i64>() {
-                            Ok(v) => v,
-                            Err(_) => return simple_error("Invalid Addition TTL value"),
-                        };
+                                    bulk_string_response(Some("SUCCESS"))
+                                }
+                                _ => bulk_error_response("Invalid request type for SET value"),
+                            }
+                        }
+                        _ => bulk_error_response("Invalid request type for SET key"),
+                    }
+                }
+                Command::Delete => {
+                    if children.len() < 2 {
+                        return bulk_error_response("Command missing some arguments");
+                    }
 
-                        let result = storage.write().extend_ttl(&key, ttl);
-                        match result {
-                            Ok(()) => bstring(Some("SUCCESS".to_string())),
-                            Err(e) => bstring(Some(e)),
+                    i += 1;
+                    match &children[i] {
+                        RequestType::BulkString { data } => {
+                            let key = String::from_utf8_lossy(data).to_string();
+                            storage.write().remove_entry(&key);
+                            bulk_string_response(Some("SUCCESS"))
+                        }
+                        _ => bulk_error_response("Invalid request type for DELETE key"),
+                    }
+                }
+
+                Command::EntryStats => {
+                    if children.len() < 2 {
+                        return bulk_error_response("Command missing some arguments");
+                    }
+
+                    i += 1;
+                    match &children[i] {
+                        RequestType::BulkString { data } => {
+                            let key = String::from_utf8_lossy(data).to_string();
+                            let entry = storage.write().get_entry(&key);
+
+                            match entry {
+                                Some(e) => bulk_string_response(Some(&e.to_string())),
+                                None => null_response(),
+                            }
+                        }
+                        _ => bulk_error_response("Invalid request type for ENTRYSTATS key"),
+                    }
+                }
+
+                Command::ConfGet => {
+                    if children.len() < 2 {
+                        return bulk_error_response("Command missing some arguments");
+                    }
+
+                    i += 1;
+                    match &children[i] {
+                        RequestType::BulkString { data } => {
+                            let key = String::from_utf8_lossy(data).to_string();
+                            let entry = storage.read().get_config_entry(&key);
+
+                            match entry {
+                                Some(e) => bulk_string_response(Some(&e.to_string())),
+                                None => null_response(),
+                            }
+                        }
+                        _ => bulk_error_response("Invalid request type for CONFGET key"),
+                    }
+                }
+
+                Command::ConfSet => {
+                    if children.len() < 3 {
+                        return bulk_error_response("Command missing some arguments");
+                    }
+                    i += 1;
+                    match &children[i] {
+                        RequestType::BulkString { data } => {
+                            let key = String::from_utf8_lossy(data).to_string();
+                            i += 1;
+                            match &children[i] {
+                                RequestType::BulkString { data } => {
+                                    let entry_value = String::from_utf8_lossy(data).to_string();
+                                    let entry_value = get_value_type(&entry_value);
+                                    let conf_entry = match config_entry(&key, &entry_value) {
+                                        Ok(e) => e,
+                                        Err(e) => return bulk_error_response(&e),
+                                    };
+                                    storage.write().set_config_entry(&conf_entry);
+
+                                    bulk_string_response(Some("SUCCESS"))
+                                }
+                                _ => bulk_error_response("Invalid request type for SET value"),
+                            }
+                        }
+                        _ => bulk_error_response("Invalid request type for SET key"),
+                    }
+                }
+
+                Command::GetTtl => {
+                    if children.len() < 2 {
+                        return bulk_error_response("Command missing some arguments");
+                    }
+
+                    i += 1;
+                    match &children[i] {
+                        RequestType::BulkString { data } => {
+                            let key = String::from_utf8_lossy(data).to_string();
+                            let ttl = storage.write().time_to_live(&key);
+                            match ttl {
+                                Some(ttl) => integer_response(ttl.as_secs() as i64),
+                                None => null_response(),
+                            }
+                        }
+                        _ => bulk_error_response("Invalid request type for GETTTL key"),
+                    }
+                }
+
+                Command::SetwTtl => {
+                    if children.len() < 4 {
+                        return bulk_error_response("Command missing some arguments");
+                    }
+                    i += 1;
+                    match &children[i] {
+                        RequestType::BulkString { data } => {
+                            let key = String::from_utf8_lossy(data).to_string();
+                            i += 1;
+                            match &children[i] {
+                                RequestType::BulkString { data } => {
+                                    let entry_value = String::from_utf8_lossy(data).to_string();
+                                    i += 1;
+                                    match &children[i] {
+                                        RequestType::Integer { data } => {
+                                            let entry_value = get_value_type(&entry_value);
+                                            let ttl = String::from_utf8_lossy(data).to_string();
+                                            let ttl = get_value_type(&ttl);
+                                            let ttl = match ttl {
+                                                StorageValue::Int(n) => {
+                                                    Duration::from_secs(n as u64)
+                                                }
+                                                _ => {
+                                                    return bulk_error_response(
+                                                        "Invalid SETWTTL ttl",
+                                                    );
+                                                }
+                                            };
+                                            storage.write().insert_with_ttl(key, entry_value, ttl);
+
+                                            bulk_string_response(Some("SUCCESS"))
+                                        }
+                                        _ => bulk_error_response("Invalid SETWTTL ttl"),
+                                    }
+                                }
+                                _ => bulk_error_response("Invalid request type for SETWTTL value"),
+                            }
+                        }
+                        _ => bulk_error_response("Invalid request type for SETWTTL key"),
+                    }
+                }
+
+                Command::ExtendTtl => {
+                    if children.len() < 3 {
+                        return bulk_error_response("Command missing some arguments");
+                    }
+                    i += 1;
+                    match &children[i] {
+                        RequestType::BulkString { data } => {
+                            let key = String::from_utf8_lossy(data).to_string();
+                            i += 1;
+                            match &children[i] {
+                                RequestType::Integer { data } => {
+                                    let addition_ttl = String::from_utf8_lossy(data).to_string();
+                                    let addition_ttl = match get_value_type(&addition_ttl) {
+                                        StorageValue::Int(n) => n,
+                                        _ => {
+                                            return bulk_error_response(
+                                                "Invalid EXTENDTTL addition_tll",
+                                            );
+                                        }
+                                    };
+
+                                    match storage.write().extend_ttl(&key, addition_ttl) {
+                                        Ok(()) => bulk_string_response(Some("SUCCESS")),
+                                        Err(e) => bulk_error_response(&e),
+                                    };
+
+                                    bulk_string_response(Some("SUCCESS"))
+                                }
+                                _ => {
+                                    bulk_error_response("Invalid request type for EXTENDTTL value")
+                                }
+                            }
+                        }
+                        _ => bulk_error_response("Invalid request type for EXTENDTTL key"),
+                    }
+                }
+
+                Command::DeleteList => {
+                    let mut keys = Vec::new();
+                    for child in children {
+                        match child {
+                            RequestType::BulkString { data } => {
+                                let key = String::from_utf8_lossy(data).to_string();
+                                keys.push(key);
+                            }
+                            _ => continue,
                         }
                     }
-                    None => simple_error("Missing value"),
-                },
-                None => simple_error("Missing key"),
-            }
-        }
 
-        Command::GetTtl => {
-            if req.len() < 2 {
-                return simple_error("Missing key");
-            }
-            if let Some(key) = get_data(&req[i]) {
-                let value = storage.write().time_to_live(&key);
-                if let Some(v) = value {
-                    // TODO! Fix this later
-                    return bstring(Some(v.as_secs().to_string()));
+                    storage.write().remove_entries(&keys);
+
+                    bulk_string_response(Some("SUCCESS"))
                 }
-                bstring(None)
-            } else {
-                bstring(None)
+
+                Command::GetList => {
+                    if children.is_empty() {
+                        return null_response();
+                    }
+                    i += 1;
+
+                    let mut keys = Vec::new();
+                    for child in &children[i..] {
+                        match child {
+                            RequestType::BulkString { data } => {
+                                let key = String::from_utf8_lossy(data).to_string();
+                                keys.push(key);
+                            }
+                            _ => continue,
+                        }
+                    }
+
+                    let entries = storage.write().get_entries(&keys);
+                    // Entries -> Vec<(String, Option<StorageEntry>)>
+                    // Response -> [[key, value|null], [key, value|null]]
+                    batch_entries_response(&entries)
+                }
+
+                // [SETLIST  [key, value], [key, value]]
+                Command::SetList => {
+                    if children.is_empty() {
+                        return null_response();
+                    }
+                    let mut entries = HashMap::with_capacity(children.len());
+                    i += 1;
+                    for child in &children[i..] {
+                        /* [key, value] */
+                        match child {
+                            RequestType::Array { children } => {
+                                for child in children {
+                                    match child {
+                                        RequestType::Array { children } => {
+                                            if children.len() > 2 || children.is_empty() {
+                                                return bulk_error_response(
+                                                    "Invalid array elems count",
+                                                );
+                                            }
+                                            let key = match &children[0] {
+                                                RequestType::BulkString { data } => {
+                                                    String::from_utf8_lossy(data).to_string()
+                                                }
+                                                _ => {
+                                                    return bulk_error_response(
+                                                        "Invalid SETLIST key entry",
+                                                    );
+                                                }
+                                            };
+                                            let value = match &children[1] {
+                                                RequestType::BulkString { data } => {
+                                                    String::from_utf8_lossy(data).to_string()
+                                                }
+                                                _ => {
+                                                    return bulk_error_response(
+                                                        "Invalid SETLIST value entry",
+                                                    );
+                                                }
+                                            };
+
+                                            let storage_value = get_value_type(&value);
+                                            entries.insert(key, storage_value);
+                                        }
+                                        _ => return bulk_error_response("Not an array list"),
+                                    }
+                                }
+                            }
+                            _ => return bulk_error_response("Invalid SETLIST args"),
+                        }
+                    }
+
+                    storage.write().insert_entries(entries);
+
+                    bulk_string_response(Some("SUCCESS"))
+                }
             }
         }
-
-        Command::ConfOptions => {
-            let opts = storage.read().get_options();
-            bstring(Some(opts.to_string()))
-        }
+        _ => unreachable!("later"),
     }
 }
 

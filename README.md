@@ -26,7 +26,7 @@ Run some commands
 
 ```bash
 HELP
-SET key value    # Value translated to String
+SET key value
 GET key
 DELETE key
 

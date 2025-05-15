@@ -1,13 +1,154 @@
-use std::collections::HashSet;
-
 // Redis Serialization Protocol v3.0
-struct Request {
-    data_type: DataType,
-    content: Vec<u8>,
-    nested: Option<Vec<Request>>,
+use std::collections::{HashMap, HashSet};
+
+use crate::StorageEntry;
+
+pub fn bulk_string_response(data: Option<&str>) -> Vec<u8> {
+    match data {
+        Some(rsp) => {
+            let mut s = String::new();
+            s.push('$');
+            let len = rsp.len();
+            s.push_str(&len.to_string());
+            s.push_str("\r\n");
+            s.push_str(rsp);
+            s.push_str("\r\n");
+
+            s.as_bytes().to_vec()
+        }
+        None => null_response(),
+    }
 }
 
-enum DataType {
+pub fn null_response() -> Vec<u8> {
+    // null $-1\r\n
+    b"$-1\r\n".to_vec()
+}
+
+pub fn bulk_error_response(err: &str) -> Vec<u8> {
+    let mut s = String::new();
+    s.push('!');
+    let len = err.len();
+    s.push_str(&len.to_string());
+    s.push_str("\r\n");
+    s.push_str(err);
+    s.push_str("\r\n");
+
+    s.as_bytes().to_vec()
+}
+
+// #<t|f>\r\n
+pub fn boolean_response(b: bool) -> Vec<u8> {
+    if b {
+        b"#t\r\n".to_vec()
+    } else {
+        b"#f\r\n".to_vec()
+    }
+}
+
+// :[<+|->]<value>\r\n
+pub fn integer_response(i: i64) -> Vec<u8> {
+    format!(":{i}\r\n").as_bytes().to_vec()
+}
+
+// *<number-of-elements>\r\n<element-1>...<element-n>
+// This failed -> [[key, value|null], [key, value|null]]
+// This currently works -> [value|null, value|null]
+pub fn batch_entries_response(data: &[(String, Option<StorageEntry>)]) -> Vec<u8> {
+    if data.is_empty() {
+        return null_response();
+    }
+
+    let mut outer_vec = String::new();
+    outer_vec.push('*');
+    outer_vec.push_str(&data.len().to_string());
+    let delim = "\r\n";
+    outer_vec.push_str(delim);
+
+    for (key, value) in data {
+        let key = {
+            let mut k = String::new();
+            k.push('$');
+            k.push_str(&key.len().to_string());
+            k.push_str(delim);
+            k.push_str(key);
+            k.push_str(delim);
+
+            k
+        };
+
+        let value = {
+            match value {
+                Some(value) => {
+                    let value = value.value.to_string();
+                    let mut v = String::new();
+                    v.push('$');
+                    v.push_str(&value.len().to_string());
+                    v.push_str(delim);
+                    v.push_str(&value);
+                    v.push_str(delim);
+
+                    v
+                }
+                None => "$-1\r\n".to_string(),
+            }
+        };
+
+        let mut inner_vec = String::new();
+        inner_vec.push('*');
+        inner_vec.push_str(&2.to_string());
+        inner_vec.push_str(delim);
+        inner_vec.push_str(&key);
+        inner_vec.push_str(&value);
+
+        outer_vec.push_str(&inner_vec);
+    }
+    outer_vec.as_bytes().to_vec()
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum RequestType {
+    SimpleString {
+        data: Vec<u8>,
+    },
+    SimpleError {
+        data: Vec<u8>,
+    },
+    Integer {
+        data: Vec<u8>,
+    },
+    BulkString {
+        data: Vec<u8>,
+    },
+    Null,
+    Boolean {
+        data: bool,
+    },
+    Double {
+        data: Vec<u8>,
+    },
+    BigNumber {
+        data: Vec<u8>,
+    },
+    BulkError {
+        data: Vec<u8>,
+    },
+    VerbatimString {
+        data: Vec<Vec<u8>>,
+    },
+    Array {
+        children: Vec<RequestType>,
+    },
+    Map {
+        children: HashMap<String, RequestType>,
+    },
+    Set {
+        children: HashSet<Vec<u8>>,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq, Clone)]
+pub enum DataType {
     SimpleString,
     SimpleError,
     Integer,
@@ -20,9 +161,7 @@ enum DataType {
     BulkError,
     VerbatimString,
     Maps,
-    Attributes,
     Sets,
-    Pushes,
     Unknown,
 }
 
@@ -40,14 +179,12 @@ fn get_data_type(byte: u8) -> DataType {
         b'!' => DataType::BulkError,
         b'=' => DataType::VerbatimString,
         b'%' => DataType::Maps,
-        b'`' => DataType::Attributes,
         b'~' => DataType::Sets,
-        b'>' => DataType::Pushes,
         _ => DataType::Unknown,
     }
 }
 
-fn parse_simple_strings(data: &[u8]) -> Result<(Vec<u8>, usize), String> {
+fn parse_simple_strings(data: &[u8]) -> Result<(RequestType, usize), String> {
     let mut s = Vec::new();
     let mut i = 0;
     while i < data.len() && data[i] != b'\r' {
@@ -59,11 +196,22 @@ fn parse_simple_strings(data: &[u8]) -> Result<(Vec<u8>, usize), String> {
     }
 
     i += 2;
-    Ok((s, i))
+    Ok((RequestType::SimpleString { data: s }, i))
 }
 
-fn parse_simple_errors(data: &[u8]) -> Result<(Vec<u8>, usize), String> {
-    parse_simple_strings(data)
+fn parse_simple_errors(data: &[u8]) -> Result<(RequestType, usize), String> {
+    let mut s = Vec::new();
+    let mut i = 0;
+    while i < data.len() && data[i] != b'\r' {
+        s.push(data[i]);
+        i += 1;
+    }
+    if i >= data.len() || i + 1 >= data.len() || data[i] != b'\r' || data[i + 1] != b'\n' {
+        return Err("No proper termination".to_string());
+    }
+
+    i += 2;
+    Ok((RequestType::SimpleError { data: s }, i))
 }
 
 // :[<+|->]<value>\r\n
@@ -72,7 +220,7 @@ fn parse_simple_errors(data: &[u8]) -> Result<(Vec<u8>, usize), String> {
 // An optional plus (+) or minus (-) as the sign.
 // One or more decimal digits (0..9) as the integer's unsigned, base-10 value.
 // The CRLF terminator.
-fn parse_integers(data: &[u8]) -> Result<(Vec<u8>, usize), String> {
+fn parse_integers(data: &[u8]) -> Result<(RequestType, usize), String> {
     let mut i = 0;
     let sign = match data[i] {
         b'-' => {
@@ -97,9 +245,9 @@ fn parse_integers(data: &[u8]) -> Result<(Vec<u8>, usize), String> {
         Some(s) => {
             let mut v = vec![s];
             v.extend_from_slice(&num_bytes);
-            Ok((v, i))
+            Ok((RequestType::Integer { data: v }, i))
         }
-        None => Ok((num_bytes, i)),
+        None => Ok((RequestType::Integer { data: num_bytes }, i)),
     }
 }
 
@@ -109,7 +257,7 @@ fn parse_integers(data: &[u8]) -> Result<(Vec<u8>, usize), String> {
 // The CRLF terminator.
 // The data.
 // A final CRLF.
-fn parse_bulk_strings(data: &[u8]) -> Result<(Vec<u8>, usize), String> {
+fn parse_bulk_strings(data: &[u8]) -> Result<(RequestType, usize), String> {
     let mut i = 0;
     let mut length = Vec::new();
     while i < data.len() && data[i] != b'\r' {
@@ -129,7 +277,7 @@ fn parse_bulk_strings(data: &[u8]) -> Result<(Vec<u8>, usize), String> {
     // null bstrings
     // $-1\r\n
     if length < 0 {
-        return Ok((Vec::new(), i));
+        return Ok((RequestType::Null, i));
     }
 
     if i + length as usize > data.len() {
@@ -144,7 +292,12 @@ fn parse_bulk_strings(data: &[u8]) -> Result<(Vec<u8>, usize), String> {
     }
 
     i += 2;
-    Ok((content.to_vec(), i))
+    Ok((
+        RequestType::BulkString {
+            data: content.to_vec(),
+        },
+        i,
+    ))
 }
 
 // *<number-of-elements>\r\n<element-1>...<element-n>
@@ -154,7 +307,7 @@ fn parse_bulk_strings(data: &[u8]) -> Result<(Vec<u8>, usize), String> {
 // the array as an unsigned, base-10 value.
 // The CRLF terminator.
 // An additional RESP type for every element of the array.
-fn parse_arrays(data: &[u8]) -> Result<(Vec<Request>, usize), String> {
+fn parse_arrays(data: &[u8]) -> Result<(RequestType, usize), String> {
     let mut i = 0;
     let mut length = Vec::new();
     while i < data.len() && data[i] != b'\r' {
@@ -170,7 +323,7 @@ fn parse_arrays(data: &[u8]) -> Result<(Vec<Request>, usize), String> {
 
     // null arrays
     if length < 1 {
-        return Ok((Vec::new(), i));
+        return Ok((RequestType::Null, i));
     }
 
     let mut elements = Vec::with_capacity(length as usize);
@@ -187,10 +340,8 @@ fn parse_arrays(data: &[u8]) -> Result<(Vec<Request>, usize), String> {
         match elem_type {
             DataType::Array => {
                 let (nested_elems, consumed) = parse_arrays(&data[i..])?;
-                elements.push(Request {
-                    data_type: DataType::Array,
-                    content: Vec::new(),
-                    nested: Some(nested_elems),
+                elements.push(RequestType::Array {
+                    children: vec![nested_elems],
                 });
                 i += consumed;
             }
@@ -205,37 +356,37 @@ fn parse_arrays(data: &[u8]) -> Result<(Vec<Request>, usize), String> {
                 };
 
                 i += consumed;
-                elements.push(Request {
-                    data_type: elem_type,
-                    content,
-                    nested: None,
-                });
+                elements.push(content);
             }
         }
     }
 
-    Ok((elements, i))
+    Ok((RequestType::Array { children: elements }, i))
 }
 
 // _\r\n
-fn parse_null(data: &[u8]) -> Result<(Vec<u8>, usize), String> {
+fn parse_null(data: &[u8]) -> Result<(RequestType, usize), String> {
     if data[0] == b'\r' && data[1] == b'\n' {
-        return Ok((Vec::new(), 2));
+        return Ok((RequestType::Null, 2));
     }
     Err("Invalid null format".to_string())
 }
 
 // #<t|f>\r\n
-fn parse_booleans(data: &[u8]) -> Result<(Vec<u8>, usize), String> {
-    if (data[0] == b't' || data[0] == b'f') && (data[1] == b'\r' && data[2] == b'\n') {
-        return Ok((vec![data[0]], 3));
+fn parse_booleans(data: &[u8]) -> Result<(RequestType, usize), String> {
+    if (data[0] == b't') && (data[1] == b'\r' && data[2] == b'\n') {
+        return Ok((RequestType::Boolean { data: true }, 3));
+    }
+
+    if (data[0] == b'f') && (data[1] == b'\r' && data[2] == b'\n') {
+        return Ok((RequestType::Boolean { data: false }, 3));
     }
 
     Err("Invalid boolean format".to_string())
 }
 
 // ,[<+|->]<integral>[.<fractional>][<E|e>[sign]<exponent>]\r\n
-fn parse_doubles(data: &[u8]) -> Result<(Vec<u8>, usize), String> {
+fn parse_doubles(data: &[u8]) -> Result<(RequestType, usize), String> {
     let mut i = 0;
     let num_sign = match data[i] {
         b'-' => {
@@ -253,9 +404,14 @@ fn parse_doubles(data: &[u8]) -> Result<(Vec<u8>, usize), String> {
             if let Some(s) = num_sign {
                 let mut v = vec![s];
                 v.extend_from_slice(&data[1..4]);
-                return Ok((v, 6));
+                return Ok((RequestType::Double { data: v }, 6));
             } else {
-                return Ok((data[..3].to_vec(), 5));
+                return Ok((
+                    RequestType::Double {
+                        data: data[..3].to_vec(),
+                    },
+                    5,
+                ));
             }
         } else {
             return Err("Unterminated infinite".to_string());
@@ -265,7 +421,12 @@ fn parse_doubles(data: &[u8]) -> Result<(Vec<u8>, usize), String> {
     // ,nan\r\n
     if data[i] == b'n' && data[i + 1] == b'a' && data[i + 2] == b'n' && num_sign.is_none() {
         if data[i + 3] == b'\r' && data[i + 4] == b'\n' {
-            return Ok((data[..3].to_vec(), 5));
+            return Ok((
+                RequestType::Double {
+                    data: data[..3].to_vec(),
+                },
+                5,
+            ));
         } else {
             return Err("Unterminated NaN value".to_string());
         }
@@ -289,9 +450,9 @@ fn parse_doubles(data: &[u8]) -> Result<(Vec<u8>, usize), String> {
             if let Some(s) = num_sign {
                 let mut v = vec![s];
                 v.append(&mut num_bytes);
-                return Ok((v, i));
+                return Ok((RequestType::Double { data: v }, i));
             }
-            return Ok((num_bytes, i));
+            return Ok((RequestType::Double { data: num_bytes }, i));
         } else {
             return Err("unterminated double".to_string());
         }
@@ -351,11 +512,11 @@ fn parse_doubles(data: &[u8]) -> Result<(Vec<u8>, usize), String> {
 
     result.extend_from_slice(&fraction);
 
-    Ok((result, i))
+    Ok((RequestType::Double { data: result }, i))
 }
 
 // ([+|-]<number>\r\n
-fn parse_big_numbers(data: &[u8]) -> Result<(Vec<u8>, usize), String> {
+fn parse_big_numbers(data: &[u8]) -> Result<(RequestType, usize), String> {
     let mut i = 0;
     let sign = match data[i] {
         b'-' => {
@@ -380,14 +541,53 @@ fn parse_big_numbers(data: &[u8]) -> Result<(Vec<u8>, usize), String> {
     if let Some(s) = sign {
         let mut v = vec![s];
         v.extend_from_slice(&num_bytes);
-        Ok((v, i))
+        Ok((RequestType::BigNumber { data: v }, i))
     } else {
-        Ok((num_bytes, i))
+        Ok((RequestType::BigNumber { data: num_bytes }, i))
     }
 }
 
-fn parse_bulk_errors(data: &[u8]) -> Result<(Vec<u8>, usize), String> {
-    parse_bulk_strings(data)
+fn parse_bulk_errors(data: &[u8]) -> Result<(RequestType, usize), String> {
+    let mut i = 0;
+    let mut length = Vec::new();
+    while i < data.len() && data[i] != b'\r' {
+        length.push(data[i]);
+        i += 1;
+    }
+    if i >= data.len() || i + 1 >= data.len() || data[i] != b'\r' || data[i + 1] != b'\n' {
+        return Err("No proper termination".to_string());
+    }
+
+    let length = match i64::from_ascii(&length) {
+        Ok(len) => len,
+        Err(_) => return Err("i64 from ascii".to_string()), // Error in parsing length
+    };
+
+    i += 2;
+    // null bulk errors
+    // $-1\r\n
+    if length < 0 {
+        return Ok((RequestType::Null, i));
+    }
+
+    if i + length as usize > data.len() {
+        return Err("Not enough data".to_string());
+    }
+
+    let content = &data[i..i + length as usize];
+    i += length as usize;
+
+    if i + 1 >= data.len() || data[i] != b'\r' || data[i + 1] != b'\n' {
+        return Err("No proper termination".to_string());
+    }
+
+    i += 2;
+    Ok((
+        RequestType::BulkError {
+            data: content.to_vec(),
+        },
+        i,
+    ))
 }
 
 // =<length>\r\n<encoding>:<data>\r\n
@@ -400,7 +600,7 @@ fn parse_bulk_errors(data: &[u8]) -> Result<(Vec<u8>, usize), String> {
 // The colon (:) character separates the encoding and data.
 // The data.
 // A final CRLF.
-fn parse_verbatim_strings(data: &[u8]) -> Result<(Vec<Vec<u8>>, usize), String> {
+fn parse_verbatim_strings(data: &[u8]) -> Result<(RequestType, usize), String> {
     let mut len_bytes = Vec::new();
     let mut i = 0;
     while i < data.len() && data[i].is_ascii_alphanumeric() {
@@ -447,13 +647,16 @@ fn parse_verbatim_strings(data: &[u8]) -> Result<(Vec<Vec<u8>>, usize), String> 
     }
     i += 2;
 
-    Ok((vec![encoding, v_string], i))
+    Ok((
+        RequestType::VerbatimString {
+            data: vec![encoding, v_string],
+        },
+        i,
+    ))
 }
 
 // %<number-of-entries>\r\n<key-1><value-1>...<key-n><value-n>
-type Key = Vec<u8>;
-type Value = Vec<u8>;
-fn parse_maps(data: &[u8]) -> Result<(Vec<(Key, Value)>, usize), String> {
+fn parse_maps(data: &[u8]) -> Result<(RequestType, usize), String> {
     let mut len_bytes = Vec::new();
     let mut i = 0;
 
@@ -476,23 +679,30 @@ fn parse_maps(data: &[u8]) -> Result<(Vec<(Key, Value)>, usize), String> {
     }
     i += 2;
 
-    let mut entries = Vec::with_capacity(num_of_entries);
+    let mut entries = HashMap::with_capacity(num_of_entries);
     let mut n = 0;
     while i < data.len() && n < num_of_entries {
         let (key, consumed) = parse_nested_entry(&data[i..])?;
         i += consumed;
         let (value, consumed) = parse_nested_entry(&data[i..])?;
         i += consumed;
-        entries.push((key, value));
+
+        let key = match key {
+            RequestType::BulkString { data } => String::from_utf8_lossy(&data).to_string(),
+            RequestType::SimpleString { data } => String::from_utf8_lossy(&data).to_string(),
+            _ => unimplemented!(),
+        };
+
+        entries.insert(key, value);
         n += 1;
     }
 
-    Ok((entries, i))
+    Ok((RequestType::Map { children: entries }, i))
 }
 
-fn parse_nested_entry(data: &[u8]) -> Result<(Vec<u8>, usize), String> {
+fn parse_nested_entry(data: &[u8]) -> Result<(RequestType, usize), String> {
     if data.is_empty() {
-        return Ok((Vec::new(), 0));
+        return Ok((RequestType::Null, 0));
     }
 
     let (content, consumed) = match get_data_type(data[0]) {
@@ -508,34 +718,15 @@ fn parse_nested_entry(data: &[u8]) -> Result<(Vec<u8>, usize), String> {
         DataType::BulkError => parse_bulk_errors(&data[1..])?,
         DataType::VerbatimString => todo!(),
         DataType::Maps => todo!(),
-        DataType::Attributes => todo!(),
         DataType::Sets => todo!(),
-        DataType::Pushes => todo!(),
         DataType::Unknown => return Err(format!("Unknown datatype: {}", data[0])),
     };
 
     Ok((content, consumed + 1))
 }
 
-// The attribute type is exactly like the Map type,
-//  but instead of a % character as the first byte,
-// the | character is used.
-// Attributes describe a dictionary exactly like the Map type.
-// However the client should not consider such a dictionary
-// part of the reply, but as auxiliary data that augments
-// the reply.
-// The attribute type is exactly like the Map type,
-// but instead of a % character as the first byte,
-// the | character is used. Attributes describe a
-// dictionary exactly like the Map type. However the
-// client should not consider such a dictionary part of
-// the reply, but as auxiliary data that augments the reply.
-fn parse_attributes(data: &[u8]) -> Result<(Vec<(Key, Value)>, usize), String> {
-    parse_maps(data)
-}
-
 // ~<number-of-elements>\r\n<element-1>...<element-n>
-fn parse_sets(data: &[u8]) -> Result<(HashSet<Vec<u8>>, usize), String> {
+fn parse_sets(data: &[u8]) -> Result<(RequestType, usize), String> {
     let mut i = 0;
     let mut len_bytes = Vec::new();
 
@@ -563,28 +754,60 @@ fn parse_sets(data: &[u8]) -> Result<(HashSet<Vec<u8>>, usize), String> {
     let mut n = 0;
     while i < data.len() && n < length {
         let (entry, consumed) = parse_nested_entry(data)?;
+        let entry = match entry {
+            RequestType::BulkString { data } => data.to_vec(),
+            _ => unimplemented!("later"),
+        };
+
         entries.insert(entry);
         i += consumed;
         n += 1;
     }
 
-    Ok((entries, i))
+    Ok((RequestType::Set { children: entries }, i))
 }
 
-// RESP's pushes contain out-of-band data.
-// They are an exception to the protocol's request-response
-//  model and provide a generic push mode for connections.
-// Push events are encoded similarly to arrays,
-// differing only in their first byte:
-fn parse_pushes(data: &[u8]) -> Result<(Vec<Request>, usize), String> {
-    parse_arrays(data)
+pub fn parse_request(data: &[u8]) -> Result<RequestType, String> {
+    let mut i = 0;
+    if data.is_empty() {
+        return Ok(RequestType::Null);
+    }
+
+    let data_type = match get_data_type(data[i]) {
+        DataType::Unknown => return Err("unknow type".to_string()),
+        t => t,
+    };
+    i += 1;
+
+    let (content, _) = match data_type {
+        DataType::Integer => parse_integers(&data[i..])?,
+        DataType::BulkString => parse_bulk_strings(&data[i..])?,
+        DataType::SimpleString => parse_simple_strings(&data[i..])?,
+        DataType::SimpleError => parse_simple_errors(&data[i..])?,
+        DataType::Array => parse_arrays(&data[i..])?,
+        DataType::Null => parse_null(&data[i..])?,
+        DataType::Boolean => parse_booleans(&data[i..])?,
+        DataType::Double => parse_doubles(&data[i..])?,
+        DataType::BigNumber => parse_big_numbers(&data[i..])?,
+        DataType::BulkError => parse_bulk_errors(&data[i..])?,
+        DataType::VerbatimString => parse_verbatim_strings(&data[i..])?,
+        DataType::Maps => parse_maps(&data[i..])?,
+        DataType::Sets => parse_sets(&data[i..])?,
+        DataType::Unknown => return Err("Unknown data type!".to_string()),
+    };
+
+    Ok(content)
 }
 
 #[cfg(test)]
 mod resp3_tests {
+    use std::collections::HashMap;
+
+    use crate::resp3::{RequestType, parse_request};
+
     use super::{
-        parse_attributes, parse_big_numbers, parse_booleans, parse_bulk_errors, parse_doubles,
-        parse_maps, parse_verbatim_strings,
+        parse_big_numbers, parse_booleans, parse_bulk_errors, parse_doubles, parse_maps,
+        parse_verbatim_strings,
     };
 
     #[test]
@@ -592,11 +815,11 @@ mod resp3_tests {
         let n = b"#t\r\n";
         let (data, _) = parse_booleans(&n[1..]).unwrap();
 
-        assert_eq!(data, vec![b't']);
+        assert_eq!(data, RequestType::Boolean { data: true });
 
         let n = b"#f\r\n";
         let (data, _) = parse_booleans(&n[1..]).unwrap();
-        assert_eq!(data, vec![b'f']);
+        assert_eq!(data, RequestType::Boolean { data: false });
     }
 
     #[test]
@@ -605,7 +828,12 @@ mod resp3_tests {
         let (data, consumed) = parse_doubles(&n[1..]).unwrap();
 
         assert!(consumed > 0);
-        assert_eq!(data, vec![b'1', b'.', b'2', b'3']);
+        assert_eq!(
+            data,
+            RequestType::Double {
+                data: vec![b'1', b'.', b'2', b'3']
+            }
+        );
     }
 
     #[test]
@@ -613,7 +841,12 @@ mod resp3_tests {
         let n = b",10\r\n";
         let (data, _) = parse_doubles(&n[1..]).unwrap();
 
-        assert_eq!(data, vec![b'1', b'0']);
+        assert_eq!(
+            data,
+            RequestType::Double {
+                data: vec![b'1', b'0']
+            }
+        );
     }
 
     #[test]
@@ -621,7 +854,12 @@ mod resp3_tests {
         let n = b",-inf\r\n";
         let (data, _) = parse_doubles(&n[1..]).unwrap();
 
-        assert_eq!(data, vec![b'-', b'i', b'n', b'f']);
+        assert_eq!(
+            data,
+            RequestType::Double {
+                data: vec![b'-', b'i', b'n', b'f']
+            }
+        );
     }
 
     #[test]
@@ -629,7 +867,12 @@ mod resp3_tests {
         let n = b",nan\r\n";
         let (data, _) = parse_doubles(&n[1..]).unwrap();
 
-        assert_eq!(data, vec![b'n', b'a', b'n']);
+        assert_eq!(
+            data,
+            RequestType::Double {
+                data: vec![b'n', b'a', b'n']
+            }
+        );
     }
 
     #[test]
@@ -640,7 +883,7 @@ mod resp3_tests {
 
         assert_eq!(consumed, l - 1);
         let expected: Vec<u8> = n[1..l - 2].to_vec();
-        assert_eq!(data, expected);
+        assert_eq!(data, RequestType::BigNumber { data: expected });
     }
 
     #[test]
@@ -651,7 +894,7 @@ mod resp3_tests {
         let l = n.len();
         let expected: Vec<u8> = n[5..l - 2].to_vec();
         assert_eq!(consumed, l - 1);
-        assert_eq!(data, expected);
+        assert_eq!(data, RequestType::BulkError { data: expected });
     }
 
     #[test]
@@ -661,7 +904,7 @@ mod resp3_tests {
         let l = n.len();
         let expected: Vec<Vec<u8>> = vec![b"txt".to_vec(), b"Some string".to_vec()];
         assert_eq!(consumed, l - 1);
-        assert_eq!(data, expected);
+        assert_eq!(data, RequestType::VerbatimString { data: expected });
     }
 
     // {
@@ -673,23 +916,385 @@ mod resp3_tests {
         let n = b"%2\r\n+first\r\n:1\r\n+second\r\n:2\r\n";
         let l = n.len();
 
-        let expected = vec![
-            (b"first".to_vec(), b"1".to_vec()),
-            (b"second".to_vec(), b"2".to_vec()),
-        ];
+        let expected = HashMap::from([
+            (
+                "first".to_string(),
+                RequestType::Integer {
+                    data: b"1".to_vec(),
+                },
+            ),
+            (
+                "second".to_string(),
+                RequestType::Integer {
+                    data: b"2".to_vec(),
+                },
+            ),
+        ]);
 
         let (data, consumed) = parse_maps(&n[1..]).unwrap();
-        assert_eq!(data, expected);
+        assert_eq!(data, RequestType::Map { children: expected });
         assert_eq!(consumed, l - 1);
     }
 
     #[test]
-    fn test_parse_attribute() {
-        let n = b"|1\r\n+key-popularity\r\n%2\r\n$1\r\na\r\n,0.1923\r\n$1\r\nb\r\n,0.0012\r\n*2\r\n:2039123\r\n:9543892\r\n";
+    fn t_parse_string() {
+        let s = b"+OK\r\n";
+        let result = parse_request(s).unwrap();
+        assert_eq!(
+            result,
+            RequestType::SimpleString {
+                data: vec![b'O', b'K'],
+            }
+        )
+    }
 
-        let (data, consumed) = parse_attributes(&n[1..]).unwrap();
-        let l = n.len();
+    #[test]
+    fn t_parse_errors() {
+        let s = b"-Error\r\n";
+        let result = parse_request(s).unwrap();
+        assert_eq!(
+            result,
+            RequestType::SimpleError {
+                data: vec![b'E', b'r', b'r', b'o', b'r'],
+            }
+        )
+    }
 
-        assert_eq!(consumed, l - 1);
+    #[test]
+    fn t_parse_simple_integer() {
+        let s = b":0\r\n";
+        let result = parse_request(s).unwrap();
+        assert_eq!(result, RequestType::Integer { data: vec![b'0'] })
+    }
+
+    #[test]
+    fn t_parse_large_integer() {
+        let s = b":245670\r\n";
+        let result = parse_request(s).unwrap();
+        assert_eq!(
+            result,
+            RequestType::Integer {
+                data: vec![b'2', b'4', b'5', b'6', b'7', b'0'],
+            }
+        )
+    }
+
+    #[test]
+    fn t_parse_negative_integer() {
+        let s = b":-245670\r\n";
+        let result = parse_request(s).unwrap();
+
+        assert_eq!(
+            result,
+            RequestType::Integer {
+                data: vec![b'-', b'2', b'4', b'5', b'6', b'7', b'0'],
+            }
+        )
+    }
+
+    #[test]
+    fn t_parse_empty_bstring() {
+        let s = b"$0\r\n\r\n";
+        let result = parse_request(s).unwrap();
+        assert_eq!(result, RequestType::BulkString { data: vec![] });
+    }
+
+    #[test]
+    fn t_parse_null_bstring() {
+        let s = b"$-1\r\n";
+        let result = parse_request(s).unwrap();
+        assert_eq!(result, RequestType::Null);
+    }
+
+    #[test]
+    fn t_parse_bstring() {
+        let s = b"$5\r\nhello\r\n";
+        let result = parse_request(s).unwrap();
+        assert_eq!(
+            result,
+            RequestType::BulkString {
+                data: vec![b'h', b'e', b'l', b'l', b'o'],
+            }
+        );
+    }
+
+    #[test]
+    fn t_parse_empty_array() {
+        let s = b"*0\r\n";
+        let result = parse_request(s).unwrap();
+        assert_eq!(result, RequestType::Null);
+    }
+
+    #[test]
+    fn t_parse_bstring_array() {
+        let s = b"*2\r\n$5\r\nhello\r\n$5\r\nworld\r\n";
+        let result = parse_request(s).unwrap();
+        assert_eq!(
+            result,
+            RequestType::Array {
+                children: vec![
+                    RequestType::BulkString {
+                        data: vec![b'h', b'e', b'l', b'l', b'o'],
+                    },
+                    RequestType::BulkString {
+                        data: vec![b'w', b'o', b'r', b'l', b'd'],
+                    }
+                ]
+            }
+        );
+    }
+
+    #[test]
+    fn t_parse_integer_array() {
+        let s = b"*3\r\n:1\r\n:2\r\n:3\r\n";
+
+        let result = parse_request(s).unwrap();
+        assert_eq!(
+            result,
+            RequestType::Array {
+                children: vec![
+                    RequestType::Integer { data: vec![b'1'] },
+                    RequestType::Integer { data: vec![b'2'] },
+                    RequestType::Integer { data: vec![b'3'] }
+                ]
+            }
+        );
+    }
+
+    #[test]
+    fn t_parse_mixed_integer_array() {
+        let s = b"*3\r\n:-1\r\n:2\r\n:300\r\n";
+
+        let result = parse_request(s).unwrap();
+        assert_eq!(
+            result,
+            RequestType::Array {
+                children: vec![
+                    RequestType::Integer {
+                        data: vec![b'-', b'1'],
+                    },
+                    RequestType::Integer { data: vec![b'2'] },
+                    RequestType::Integer {
+                        data: vec![b'3', b'0', b'0'],
+                    }
+                ]
+            }
+        );
+    }
+
+    #[test]
+    fn t_parse_mixed_array() {
+        let s = b"*5\r\n:1\r\n:2\r\n:3\r\n:4\r\n$5\r\nhello\r\n";
+        let result = parse_request(s).unwrap();
+        assert_eq!(
+            result,
+            RequestType::Array {
+                children: vec![
+                    RequestType::Integer { data: vec![b'1'] },
+                    RequestType::Integer { data: vec![b'2'] },
+                    RequestType::Integer { data: vec![b'3'] },
+                    RequestType::Integer { data: vec![b'4'] },
+                    RequestType::BulkString {
+                        data: vec![b'h', b'e', b'l', b'l', b'o'],
+                    }
+                ]
+            }
+        );
+    }
+
+    #[test]
+    fn t_parse_2d_array() {
+        let s = b"*2\r\n*3\r\n:1\r\n:2\r\n:3\r\n*2\r\n+Hello\r\n-World\r\n";
+        let result = parse_request(s).unwrap();
+
+        // First nested array: [1, 2, 3]
+        let nested1 = RequestType::Array {
+            children: vec![
+                RequestType::Integer { data: vec![b'1'] },
+                RequestType::Integer { data: vec![b'2'] },
+                RequestType::Integer { data: vec![b'3'] },
+            ],
+        };
+
+        // Second nested array: ["Hello", "World"]
+        let nested2 = RequestType::Array {
+            children: vec![
+                RequestType::SimpleString {
+                    data: vec![b'H', b'e', b'l', b'l', b'o'],
+                },
+                RequestType::SimpleError {
+                    data: vec![b'W', b'o', b'r', b'l', b'd'],
+                },
+            ],
+        };
+
+        assert_eq!(
+            result,
+            RequestType::Array {
+                children: vec![
+                    RequestType::Array {
+                        children: vec![nested1]
+                    },
+                    RequestType::Array {
+                        children: vec![nested2],
+                    }
+                ]
+            }
+        );
+    }
+
+    #[test]
+    fn t_parse_simple_2d_array() {
+        let s = b"*2\r\n*2\r\n:1\r\n:2\r\n*2\r\n:3\r\n:4\r\n";
+        let result = parse_request(s).unwrap();
+
+        // First nested array: [1, 2]
+        let nested1 = RequestType::Array {
+            children: vec![
+                RequestType::Integer { data: vec![b'1'] },
+                RequestType::Integer { data: vec![b'2'] },
+            ],
+        };
+
+        // Second nested array: [3, 4]
+        let nested2 = RequestType::Array {
+            children: vec![
+                RequestType::Integer { data: vec![b'3'] },
+                RequestType::Integer { data: vec![b'4'] },
+            ],
+        };
+
+        assert_eq!(
+            result,
+            RequestType::Array {
+                children: vec![
+                    RequestType::Array {
+                        children: vec![nested1,],
+                    },
+                    RequestType::Array {
+                        children: vec![nested2]
+                    }
+                ]
+            }
+        );
+    }
+
+    #[test]
+    fn t_parse_mixed_2d_array() {
+        let s = b"*3\r\n*2\r\n:1\r\n:2\r\n$5\r\nhello\r\n*2\r\n$5\r\nworld\r\n:5\r\n";
+        let result = parse_request(s).unwrap();
+
+        // First nested array: [1, 2]
+        let nested1 = RequestType::Array {
+            children: vec![
+                RequestType::Integer { data: vec![b'1'] },
+                RequestType::Integer { data: vec![b'2'] },
+            ],
+        };
+
+        // Third nested array: ["world", 5]
+        let nested3 = RequestType::Array {
+            children: vec![
+                RequestType::BulkString {
+                    data: vec![b'w', b'o', b'r', b'l', b'd'],
+                },
+                RequestType::Integer { data: vec![b'5'] },
+            ],
+        };
+
+        assert_eq!(
+            result,
+            RequestType::Array {
+                children: vec![
+                    RequestType::Array {
+                        children: vec![nested1]
+                    },
+                    RequestType::BulkString {
+                        data: vec![b'h', b'e', b'l', b'l', b'o'],
+                    },
+                    RequestType::Array {
+                        children: vec![nested3]
+                    }
+                ]
+            }
+        );
+    }
+
+    #[test]
+    fn t_parse_empty_nested_array() {
+        let s = b"*2\r\n*0\r\n*0\r\n";
+        let result = parse_request(s).unwrap();
+
+        assert_eq!(
+            result,
+            RequestType::Array {
+                children: vec![
+                    RequestType::Array {
+                        children: vec![RequestType::Null]
+                    },
+                    RequestType::Array {
+                        children: vec![RequestType::Null]
+                    },
+                ]
+            }
+        );
+    }
+
+    #[test]
+    fn t_parse_deep_nested_array() {
+        // *1\r\n*1\r\n*1\r\n:42\r\n
+        // This represents [[[42]]]
+        let s = b"*1\r\n*1\r\n*1\r\n:42\r\n";
+        let result = parse_request(s).unwrap();
+
+        // Innermost array: [42]
+        let innermost = RequestType::Array {
+            children: vec![RequestType::Integer {
+                data: vec![b'4', b'2'],
+            }],
+        };
+
+        // Middle array: [[42]]
+        let middle = RequestType::Array {
+            children: vec![RequestType::Array {
+                children: vec![innermost],
+            }],
+        };
+
+        assert_eq!(
+            result,
+            RequestType::Array {
+                children: vec![RequestType::Array {
+                    children: vec![middle]
+                }]
+            }
+        );
+    }
+
+    #[test]
+    fn t_null_array() {
+        let s = b"*-1\r\n";
+        let result = parse_request(s).unwrap();
+        assert_eq!(result, RequestType::Null,);
+    }
+
+    #[test]
+    fn t_null_array_elements() {
+        let s = b"*3\r\n$5\r\nhello\r\n$-1\r\n$5\r\nworld\r\n";
+        let result = parse_request(s).unwrap();
+        assert_eq!(
+            result,
+            RequestType::Array {
+                children: vec![
+                    RequestType::BulkString {
+                        data: vec![b'h', b'e', b'l', b'l', b'o'],
+                    },
+                    RequestType::Null,
+                    RequestType::BulkString {
+                        data: vec![b'w', b'o', b'r', b'l', b'd'],
+                    }
+                ]
+            }
+        );
     }
 }

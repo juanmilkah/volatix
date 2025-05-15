@@ -1,8 +1,9 @@
+use std::fmt::Display;
 use std::io::{Read, Write, stdin, stdout};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream};
 
-use anyhow::{Context, anyhow};
-use server_lib::parse_request;
+use anyhow::Context;
+use server_lib::{RequestType, parse_request};
 
 #[derive(PartialEq, Debug, Eq)]
 enum Command {
@@ -223,7 +224,13 @@ fn parse_line(line: &str) -> Command {
 
         // SETLIST ["foo", "bar", "foofoo", "barbar"]
         "SETLIST" => match parse_list(&chars, &mut pointer) {
-            Ok(l) => Command::SetList { list: l },
+            Ok(l) => {
+                if l.len() % 2 != 0 {
+                    Command::ParseError("Invalid number of args".to_string())
+                } else {
+                    Command::SetList { list: l }
+                }
+            }
             Err(e) => Command::ParseError(e),
         },
 
@@ -343,10 +350,7 @@ fn serialize_request(command: &Command) -> Vec<u8> {
     // the command's name. Subsequent elements of the array are the arguments
     // for the command.
     match command {
-        Command::Hello => {
-            let arr = array(&[bstring("HELLO")]);
-            arr.as_bytes().to_vec()
-        }
+        Command::Hello => bstring("HELLO").as_bytes().to_vec(),
 
         Command::Get { key } => {
             let v = [bstring("GET"), bstring(key)];
@@ -404,13 +408,18 @@ fn serialize_request(command: &Command) -> Vec<u8> {
             arr.as_bytes().to_vec()
         }
 
+        // [command, [key, value], [key, value]]
         Command::SetList { list } => {
-            let mut arr = Vec::new();
-            let cmd = bstring("SETLIST");
-            arr.push(cmd);
-            for e in list {
-                arr.push(bstring(e));
-            }
+            let mut arr = vec![bstring("SETLIST")];
+            let list: Vec<String> = list
+                .iter()
+                .map(|elem| bstring(elem))
+                .collect::<Vec<String>>()
+                .chunks(2)
+                .map(|pair| array(&[pair[0].to_string(), pair[1].to_string()]))
+                .collect();
+
+            arr.extend_from_slice(&list);
 
             let arr = array(&arr);
             arr.as_bytes().to_vec()
@@ -418,14 +427,12 @@ fn serialize_request(command: &Command) -> Vec<u8> {
 
         Command::GetStats => {
             let cmd = bstring("GETSTATS");
-            let arr = array(&[cmd]);
-            arr.as_bytes().to_vec()
+            cmd.as_bytes().to_vec()
         }
 
         Command::ResetStats => {
             let cmd = bstring("RESETSTATS");
-            let arr = array(&[cmd]);
-            arr.as_bytes().to_vec()
+            cmd.as_bytes().to_vec()
         }
 
         Command::ConfGet { key } => {
@@ -485,7 +492,7 @@ fn serialize_request(command: &Command) -> Vec<u8> {
         }
 
         Command::ConfOptions => {
-            let arr = array(&[bstring("CONFOPTIONS")]);
+            let arr = bstring("CONFOPTIONS");
             arr.as_bytes().to_vec()
         }
 
@@ -493,21 +500,134 @@ fn serialize_request(command: &Command) -> Vec<u8> {
     }
 }
 
-fn deserialize_response(resp: &[u8]) -> anyhow::Result<Vec<String>> {
-    let resp = parse_request(resp).context("deserialise response")?;
-    if resp.is_empty() {
-        return Ok(Vec::new());
-    }
+#[derive(Debug)]
+enum Response {
+    SimpleString { data: String },
+    SimpleError { data: String },
+    Integer { data: i64 },
+    BigNumber { data: f64 },
+    Null,
+    Array { data: Vec<Response> },
+}
 
-    Ok(resp
-        .iter()
-        .map(|r| {
-            r.content
-                .as_ref()
-                .map(|c| String::from_utf8_lossy(c).to_string())
-        })
-        .map(|c| c.unwrap_or("NULL".to_string()))
-        .collect())
+impl Display for Response {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SimpleString { data } => write!(f, "{data}"),
+            Self::Integer { data } => write!(f, "{data}"),
+            Self::Null => write!(f, "NULL"),
+            Self::BigNumber { data } => write!(f, "{data}"),
+            Self::Array { data } => write!(f, "{data:?}"),
+            Self::SimpleError { data } => write!(f, "{data}"),
+        }
+    }
+}
+
+// SET foo bar
+// GET foo -> "bar"
+// GET bar -> NULL
+// SETLIST [foo, foofoo, bar, barbar, baz, bazbaz]
+// GETLIST [foo, bar,baz] -> [[foo, foofoo], [bar, barbar], [baz, bazbaz]]
+fn deserialize_response(resp: &[u8]) -> Result<Response, String> {
+    let resp = parse_request(resp)?;
+
+    match &resp {
+        RequestType::BulkString { data } => {
+            let data = String::from_utf8_lossy(data).to_string();
+            Ok(Response::SimpleString { data })
+        }
+        RequestType::Null => Ok(Response::Null),
+
+        RequestType::Integer { data } => {
+            let int = String::from_utf8_lossy(data).to_string();
+            let int = match int.parse::<i64>() {
+                Ok(i) => i,
+                Err(e) => return Err(e.to_string()),
+            };
+
+            Ok(Response::Integer { data: int })
+        }
+
+        RequestType::BigNumber { data } => {
+            let int = String::from_utf8_lossy(data).to_string();
+            let float = match int.parse::<f64>() {
+                Ok(i) => i,
+                Err(e) => return Err(e.to_string()),
+            };
+
+            Ok(Response::BigNumber { data: float })
+        }
+
+        RequestType::BulkError { data } => Ok(Response::SimpleError {
+            data: String::from_utf8_lossy(data).to_string(),
+        }),
+
+        RequestType::Array { children } => {
+            let mut outer_vec = Vec::new();
+            for child in children {
+                match child {
+                    RequestType::BulkString { data } => {
+                        let child = Response::SimpleString {
+                            data: String::from_utf8_lossy(data).to_string(),
+                        };
+                        outer_vec.push(child);
+                    }
+
+                    RequestType::Null => outer_vec.push(Response::Null),
+
+                    RequestType::Array { children } => {
+                        let mut inner_vec = Vec::new();
+                        for child in children {
+                            match child {
+                                RequestType::BulkString { data } => {
+                                    let child = Response::SimpleString {
+                                        data: String::from_utf8_lossy(data).to_string(),
+                                    };
+                                    inner_vec.push(child);
+                                }
+                                RequestType::Null => inner_vec.push(Response::Null),
+
+                                RequestType::SimpleString { data } => {
+                                    let child = Response::SimpleString {
+                                        data: String::from_utf8_lossy(data).to_string(),
+                                    };
+                                    inner_vec.push(child);
+                                }
+                                RequestType::Array { children } => {
+                                    let mut deeper_vec = Vec::new();
+                                    for child in children {
+                                        match child {
+                                            RequestType::BulkString { data } => {
+                                                let child = Response::SimpleString {
+                                                    data: String::from_utf8_lossy(data).to_string(),
+                                                };
+                                                deeper_vec.push(child);
+                                            }
+                                            RequestType::Null => inner_vec.push(Response::Null),
+                                            _ => unimplemented!(),
+                                        }
+                                    }
+                                    outer_vec.push(Response::Array { data: deeper_vec })
+                                }
+
+                                _ => {
+                                    dbg!(resp);
+                                    unreachable!();
+                                }
+                            }
+                        }
+                        if !inner_vec.is_empty() {
+                            outer_vec.push(Response::Array { data: inner_vec });
+                        }
+                    }
+
+                    _ => unreachable!(),
+                }
+            }
+            Ok(Response::Array { data: outer_vec })
+        }
+        _ => unimplemented!("later"),
+    }
 }
 
 fn handshake(mut stream: &TcpStream) -> Result<(), String> {
@@ -528,15 +648,16 @@ fn handshake(mut stream: &TcpStream) -> Result<(), String> {
         Err(e) => return Err(e.to_string()),
     };
 
-    if res.is_empty() {
-        return Err("Handshake failed".to_string());
-    }
+    match res {
+        Response::SimpleString { data } => {
+            if data == "HELLO" {
+                return Ok(());
+            }
 
-    if res[0].as_str() == "HELLO" {
-        return Ok(());
+            Err("Invalid data for handshake".to_string())
+        }
+        _ => Err("Invalid response type for handshake".to_string()),
     }
-
-    Err("Unknown response".to_string())
 }
 fn help() {
     println!("USAGE: ");
@@ -562,7 +683,7 @@ fn help() {
     println!("  GETTTL key");
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() -> Result<(), String> {
     println!("VOLATIX CLI!!");
     println!("If stuck try `HELP` and `EXIT`");
 
@@ -571,12 +692,12 @@ fn main() -> anyhow::Result<()> {
     // 1MB
     let mut buffer = [0u8; 1024 * 1024];
     let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 7878));
-    let mut stream = TcpStream::connect(addr).context("connect to server")?;
+    let mut stream = TcpStream::connect(addr).expect("Failed to connect to tcp socket");
     let mut stdout = stdout();
     match handshake(&stream) {
         Ok(()) => (),
         Err(e) => {
-            return Err(anyhow!(e));
+            return Err(e);
         }
     }
 
@@ -610,22 +731,35 @@ fn main() -> anyhow::Result<()> {
             }
             _ => {
                 let req = serialize_request(&command);
-                stream.write_all(&req).context("write to stream")?;
+                if stream.write_all(&req).context("write to stream").is_err() {
+                    eprintln!("Failed writing to tcp stream");
+                    continue;
+                }
             }
         }
 
-        let read = stream.read(&mut buffer)?;
+        let read = match stream.read(&mut buffer) {
+            Ok(n) => n,
+            Err(e) => {
+                eprintln!("{e}");
+                continue;
+            }
+        };
         // The server replies with a RESP type.
         // The reply's type is determined by the command's implementation and
         // possibly by the client's protocol version.
         let resp = deserialize_response(&buffer[..read])?;
-        if resp.is_empty() {
-            let resp = "NULL";
-            println!("{resp}");
-        } else if resp.len() == 1 {
-            println!("{}", resp[0]);
-        } else {
-            println!("{resp:?}");
+        match resp {
+            Response::SimpleString { data } => println!("{data}"),
+            Response::SimpleError { data } => println!("{data}"),
+            Response::Integer { data } => println!("{data}"),
+            Response::BigNumber { data } => println!("{data}"),
+            Response::Null => println!("NULL"),
+            Response::Array { data } => {
+                // do this the rookie way for now;;
+                // fix it if you can :)
+                println!("{data:?}");
+            }
         }
     }
 
