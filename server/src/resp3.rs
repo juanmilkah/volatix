@@ -340,9 +340,7 @@ fn parse_arrays(data: &[u8]) -> Result<(RequestType, usize), String> {
         match elem_type {
             DataType::Array => {
                 let (nested_elems, consumed) = parse_arrays(&data[i..])?;
-                elements.push(RequestType::Array {
-                    children: vec![nested_elems],
-                });
+                elements.push(nested_elems);
                 i += consumed;
             }
             _ => {
@@ -1131,15 +1129,8 @@ mod resp3_tests {
         assert_eq!(
             result,
             RequestType::Array {
-                children: vec![
-                    RequestType::Array {
-                        children: vec![nested1]
-                    },
-                    RequestType::Array {
-                        children: vec![nested2],
-                    }
-                ]
-            }
+                children: vec![nested1, nested2]
+            },
         );
     }
 
@@ -1167,15 +1158,8 @@ mod resp3_tests {
         assert_eq!(
             result,
             RequestType::Array {
-                children: vec![
-                    RequestType::Array {
-                        children: vec![nested1,],
-                    },
-                    RequestType::Array {
-                        children: vec![nested2]
-                    }
-                ]
-            }
+                children: vec![nested1, nested2],
+            },
         );
     }
 
@@ -1206,17 +1190,13 @@ mod resp3_tests {
             result,
             RequestType::Array {
                 children: vec![
-                    RequestType::Array {
-                        children: vec![nested1]
-                    },
+                    nested1,
                     RequestType::BulkString {
-                        data: vec![b'h', b'e', b'l', b'l', b'o'],
+                        data: b"hello".to_vec()
                     },
-                    RequestType::Array {
-                        children: vec![nested3]
-                    }
+                    nested3
                 ]
-            }
+            },
         );
     }
 
@@ -1228,15 +1208,8 @@ mod resp3_tests {
         assert_eq!(
             result,
             RequestType::Array {
-                children: vec![
-                    RequestType::Array {
-                        children: vec![RequestType::Null]
-                    },
-                    RequestType::Array {
-                        children: vec![RequestType::Null]
-                    },
-                ]
-            }
+                children: vec![RequestType::Null, RequestType::Null]
+            },
         );
     }
 
@@ -1256,17 +1229,13 @@ mod resp3_tests {
 
         // Middle array: [[42]]
         let middle = RequestType::Array {
-            children: vec![RequestType::Array {
-                children: vec![innermost],
-            }],
+            children: vec![innermost],
         };
 
         assert_eq!(
             result,
             RequestType::Array {
-                children: vec![RequestType::Array {
-                    children: vec![middle]
-                }]
+                children: vec![middle]
             }
         );
     }

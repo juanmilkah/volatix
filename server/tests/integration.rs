@@ -185,31 +185,6 @@ mod integration {
         assert_eq!(resp, success_resp);
 
         let resp = send_request(&stream, &getlist_req).unwrap();
-        // The server parsing logic is wrong :)
-        // This should fail until fixed!!
-        // The Expected ->
-        // Array {
-        //     children: [
-        //         Array { children: [BulkString("foo"), BulkString("bar")] },
-        //         Array { children: [BulkString("bar"), BulkString("baz")] }
-        //     ]
-        // }
-        //
-        // Getting ->
-        // Array {
-        //     children: [
-        //         Array {
-        //             children: [
-        //                 Array { children: [BulkString("foo"), BulkString("bar")] }
-        //             ]
-        //         },
-        //         Array {
-        //             children: [
-        //                 Array { children: [BulkString("bar"), BulkString("baz")] }
-        //             ]
-        //         }
-        //     ]
-        // }
         let expected = RequestType::Array {
             children: vec![
                 RequestType::Array {

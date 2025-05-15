@@ -437,43 +437,33 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
                         /* [key, value] */
                         match child {
                             RequestType::Array { children } => {
-                                for child in children {
-                                    match child {
-                                        RequestType::Array { children } => {
-                                            if children.len() > 2 || children.is_empty() {
-                                                return bulk_error_response(
-                                                    "Invalid array elems count",
-                                                );
-                                            }
-                                            let key = match &children[0] {
-                                                RequestType::BulkString { data } => {
-                                                    String::from_utf8_lossy(data).to_string()
-                                                }
-                                                _ => {
-                                                    return bulk_error_response(
-                                                        "Invalid SETLIST key entry",
-                                                    );
-                                                }
-                                            };
-                                            let value = match &children[1] {
-                                                RequestType::BulkString { data } => {
-                                                    String::from_utf8_lossy(data).to_string()
-                                                }
-                                                _ => {
-                                                    return bulk_error_response(
-                                                        "Invalid SETLIST value entry",
-                                                    );
-                                                }
-                                            };
-
-                                            let storage_value = get_value_type(&value);
-                                            entries.insert(key, storage_value);
-                                        }
-                                        _ => return bulk_error_response("Not an array list"),
-                                    }
+                                if children.len() > 2 || children.is_empty() {
+                                    return bulk_error_response("Invalid array elems count");
                                 }
+                                let key = match &children[0] {
+                                    RequestType::BulkString { data } => {
+                                        String::from_utf8_lossy(data).to_string()
+                                    }
+                                    _ => {
+                                        return bulk_error_response("Invalid SETLIST key entry");
+                                    }
+                                };
+                                let value = match &children[1] {
+                                    RequestType::BulkString { data } => {
+                                        String::from_utf8_lossy(data).to_string()
+                                    }
+                                    _ => {
+                                        return bulk_error_response("Invalid SETLIST value entry");
+                                    }
+                                };
+
+                                let storage_value = get_value_type(&value);
+                                entries.insert(key, storage_value);
                             }
-                            _ => return bulk_error_response("Invalid SETLIST args"),
+                            _ => {
+                                dbg!(&child);
+                                return bulk_error_response("Not an array list");
+                            }
                         }
                     }
 
