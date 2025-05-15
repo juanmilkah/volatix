@@ -306,7 +306,7 @@ fn parse_line(line: &str) -> Command {
 }
 
 // $<length>\r\n<data>\r\n
-fn bstring(s: &str) -> String {
+pub fn bstring(s: &str) -> String {
     let mut bstring = String::new();
     let terminator = "\r\n";
 
