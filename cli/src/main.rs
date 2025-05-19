@@ -776,6 +776,16 @@ fn help() {
 }
 
 fn main() -> Result<(), String> {
+    let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 7878));
+    let mut stream = match TcpStream::connect(addr) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("{e}");
+            eprintln!("Failed to connect to Volatix server! Is it running?");
+            return Ok(());
+        }
+    };
+
     println!("VOLATIX CLI!!");
     println!("If stuck try `HELP` and `EXIT`");
 
@@ -783,8 +793,6 @@ fn main() -> Result<(), String> {
     let mut line = String::new();
     // 1MB
     let mut buffer = [0u8; 1024 * 1024];
-    let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 7878));
-    let mut stream = TcpStream::connect(addr).expect("Failed to connect to tcp socket");
     let mut stdout = stdout();
     match handshake(&stream) {
         Ok(()) => (),
