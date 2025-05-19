@@ -148,8 +148,6 @@ mod integration {
         let stream = TcpStream::connect(addr).unwrap();
 
         let set_req = array!("SET", "foo", "bar");
-        let get_req = array!("GET", "foo");
-        let delete_req = array!("DELETE", "foo");
 
         let resp = send_request(&stream, &set_req).unwrap();
         let success_resp = RequestType::BulkString {
@@ -157,6 +155,7 @@ mod integration {
         };
         assert_eq!(resp, success_resp);
 
+        let get_req = array!("GET", "foo");
         let resp = send_request(&stream, &get_req).unwrap();
         assert_eq!(
             resp,
@@ -165,6 +164,7 @@ mod integration {
             }
         );
 
+        let delete_req = array!("DELETE", "foo");
         let resp = send_request(&stream, &delete_req).unwrap();
         assert_eq!(resp, success_resp)
     }
