@@ -1,8 +1,8 @@
+use std::collections::HashMap;
 use std::fmt::Display;
 use std::io::{Read, Write, stdin, stdout};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream};
 
-use anyhow::Context;
 use server_lib::{RequestType, parse_request};
 
 #[derive(PartialEq, Debug, Eq)]
@@ -30,6 +30,9 @@ enum Command {
     },
     SetList {
         list: Vec<String>,
+    },
+    SetMap {
+        map: HashMap<String, String>,
     },
     DeleteList {
         list: Vec<String>,
@@ -170,6 +173,63 @@ fn parse_list(chars: &[char], pointer: &mut usize) -> Result<Vec<String>, String
     Ok(list)
 }
 
+fn parse_map(data: &[char], pointer: &mut usize) -> Result<HashMap<String, String>, String> {
+    let left_delim = '{';
+    let right_delim = '}';
+
+    let mut map: HashMap<String, String> = HashMap::new();
+
+    while *pointer < data.len() && data[*pointer].is_whitespace() {
+        *pointer += 1;
+    }
+
+    if *pointer < data.len() && data[*pointer] == left_delim {
+        *pointer += 1;
+    } else {
+        return Err("Missing left brace".to_string());
+    }
+
+    while *pointer < data.len() && data[*pointer] != right_delim {
+        while *pointer < data.len() && data[*pointer].is_whitespace() {
+            *pointer += 1;
+        }
+        let key = parse_arg(data, pointer, "key")?;
+        while *pointer < data.len() && data[*pointer].is_whitespace() {
+            *pointer += 1;
+        }
+
+        if *pointer < data.len() && data[*pointer] == ':' {
+            *pointer += 1;
+        } else {
+            return Err("Missing colon separator".to_string());
+        }
+
+        let value = parse_arg(data, pointer, "value")?;
+        while *pointer < data.len() && data[*pointer].is_whitespace() {
+            *pointer += 1;
+        }
+
+        map.insert(key, value);
+
+        if *pointer < data.len() && data[*pointer] == ',' {
+            *pointer += 1;
+        } else {
+            break;
+        }
+    }
+
+    while *pointer < data.len() && data[*pointer].is_whitespace() {
+        *pointer += 1;
+    }
+    if *pointer < data.len() && data[*pointer] == right_delim {
+        *pointer += 1;
+    } else {
+        return Err("Missing right brace".to_string());
+    }
+
+    Ok(map)
+}
+
 fn parse_line(line: &str) -> Command {
     let chars: Vec<_> = line.trim().chars().collect();
     let mut pointer = 0;
@@ -231,6 +291,11 @@ fn parse_line(line: &str) -> Command {
                     Command::SetList { list: l }
                 }
             }
+            Err(e) => Command::ParseError(e),
+        },
+
+        "SETMAP" => match parse_map(&chars, &mut pointer) {
+            Ok(map) => Command::SetMap { map },
             Err(e) => Command::ParseError(e),
         },
 
@@ -425,6 +490,29 @@ fn serialize_request(command: &Command) -> Vec<u8> {
             arr.as_bytes().to_vec()
         }
 
+        // [SETMAP {MAP}]
+        // %<number-of-entries>\r\n<key-1><value-1>...<key-n><value-n>
+        Command::SetMap { map } => {
+            let mut arr_str = String::new();
+            arr_str.push('*');
+            arr_str.push_str(&2.to_string());
+            arr_str.push_str("\r\n");
+            arr_str.push_str(&bstring("SETMAP"));
+
+            arr_str.push('%');
+            arr_str.push_str(&map.len().to_string());
+            arr_str.push_str("\r\n");
+
+            for (key, value) in map {
+                let key = bstring(key);
+                let value = bstring(value);
+                arr_str.push_str(&key);
+                arr_str.push_str(&value);
+            }
+
+            arr_str.as_bytes().to_vec()
+        }
+
         Command::GetStats => {
             let cmd = bstring("GETSTATS");
             cmd.as_bytes().to_vec()
@@ -517,7 +605,13 @@ impl Display for Response {
             Self::Integer { data } => write!(f, "{data}"),
             Self::Null => write!(f, "NULL"),
             Self::BigNumber { data } => write!(f, "{data}"),
-            Self::Array { data } => write!(f, "{data:?}"),
+            Self::Array { data } => {
+                let mut arr = Vec::new();
+                for child in data {
+                    arr.push(child.to_string());
+                }
+                write!(f, "{arr:?}")
+            }
             Self::SimpleError { data } => write!(f, "{data}"),
         }
     }
@@ -610,10 +704,7 @@ fn deserialize_response(resp: &[u8]) -> Result<Response, String> {
                                     outer_vec.push(Response::Array { data: deeper_vec })
                                 }
 
-                                _ => {
-                                    dbg!(resp);
-                                    unreachable!();
-                                }
+                                _ => unreachable!(),
                             }
                         }
                         if !inner_vec.is_empty() {
@@ -667,6 +758,7 @@ fn help() {
     println!();
     println!("  SETLIST [key, value, ..]");
     println!("  SETLIST {{key, value, ..}}");
+    println!("  SETMAP   {{ \"key\": \"value\"}}");
     println!("  GETLIST [key, key, ..]");
     println!("  DELETELIST [key key, ..]");
     println!();
@@ -715,7 +807,7 @@ fn main() -> Result<(), String> {
             continue;
         }
 
-        if line == "exit" {
+        if line == "exit" || line == "quit" {
             break;
         }
 
@@ -731,7 +823,7 @@ fn main() -> Result<(), String> {
             }
             _ => {
                 let req = serialize_request(&command);
-                if stream.write_all(&req).context("write to stream").is_err() {
+                if stream.write_all(&req).is_err() {
                     eprintln!("Failed writing to tcp stream");
                     continue;
                 }
@@ -983,5 +1075,26 @@ mod cli_parsing {
         let mut p = 0;
         let r = parse_list(&l, &mut p).unwrap();
         assert_eq!(r, vec!["foo", "bar", "baz"]);
+    }
+
+    #[test]
+    fn test_parse_json() {
+        let input = "{\"hello\" : \"world\"}";
+        let data: Vec<_> = input.chars().collect();
+
+        let map = parse_map(&data, &mut 0).unwrap();
+        let expected = HashMap::from([("hello".to_string(), "world".to_string())]);
+        assert_eq!(map, expected);
+
+        let input2 = "{\"hello\": \"world\", \"foo\":\"bar\"}";
+        let data: Vec<_> = input2.chars().collect();
+
+        let map = parse_map(&data, &mut 0).unwrap();
+        let expected = HashMap::from([
+            ("hello".to_string(), "world".to_string()),
+            ("foo".to_string(), "bar".to_string()),
+        ]);
+
+        assert_eq!(map, expected);
     }
 }

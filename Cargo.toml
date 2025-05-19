@@ -10,7 +10,7 @@ license = "MIT"
 [workspace]
 members = ["server", "cli", "volatix-bench"]
 
-[workspace.dependencies]
+[dependencies]
 anyhow = "1.0.98"
 parking_lot = "0.12.3"
 rand = "0.9.1"
@@ -33,9 +33,3 @@ path = "server/src/lib.rs"
 name = "volatix-bench"
 path = "volatix-bench/src/main.rs"
 
-[dependencies]
-anyhow.workspace = true
-rand.workspace = true
-parking_lot.workspace = true
-serde.workspace = true
-bincode2.workspace = true

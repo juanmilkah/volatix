@@ -268,7 +268,11 @@ fn parse_bulk_strings(data: &[u8]) -> Result<(RequestType, usize), String> {
         return Err("No proper termination".to_string());
     }
 
-    let length = match i64::from_ascii(&length) {
+    let str_length = match String::from_utf8(length.to_vec()) {
+        Ok(s) => s,
+        Err(e) => return Err(e.to_string()),
+    };
+    let length = match str_length.parse::<i64>() {
         Ok(len) => len,
         Err(_) => return Err("i64 from ascii".to_string()), // Error in parsing length
     };
@@ -315,7 +319,11 @@ fn parse_arrays(data: &[u8]) -> Result<(RequestType, usize), String> {
         i += 1;
     }
 
-    let length = match i64::from_ascii(&length) {
+    let str_length = match String::from_utf8(length.to_vec()) {
+        Ok(s) => s,
+        Err(e) => return Err(e.to_string()),
+    };
+    let length = match str_length.parse::<i64>() {
         Ok(len) => len,
         Err(_) => return Err("u64 from ascii".to_string()),
     };
@@ -349,6 +357,7 @@ fn parse_arrays(data: &[u8]) -> Result<(RequestType, usize), String> {
                     DataType::BulkString => parse_bulk_strings(&data[i..])?,
                     DataType::SimpleString => parse_simple_strings(&data[i..])?,
                     DataType::SimpleError => parse_simple_errors(&data[i..])?,
+                    DataType::Maps => parse_maps(&data[i..])?,
                     DataType::Array => unreachable!(),
                     _ => unimplemented!("todo"),
                 };
@@ -556,7 +565,11 @@ fn parse_bulk_errors(data: &[u8]) -> Result<(RequestType, usize), String> {
         return Err("No proper termination".to_string());
     }
 
-    let length = match i64::from_ascii(&length) {
+    let str_length = match String::from_utf8(length.to_vec()) {
+        Ok(s) => s,
+        Err(e) => return Err(e.to_string()),
+    };
+    let length = match str_length.parse::<i64>() {
         Ok(len) => len,
         Err(_) => return Err("i64 from ascii".to_string()), // Error in parsing length
     };
@@ -615,7 +628,11 @@ fn parse_verbatim_strings(data: &[u8]) -> Result<(RequestType, usize), String> {
     }
     i += 2;
 
-    let s_len: usize = match u64::from_ascii(&len_bytes) {
+    let str_length = match String::from_utf8(len_bytes.to_vec()) {
+        Ok(s) => s,
+        Err(e) => return Err(e.to_string()),
+    };
+    let s_len: usize = match str_length.parse::<u64>() {
         Ok(l) => l.try_into().unwrap(),
         Err(e) => return Err(e.to_string()),
     };
@@ -663,7 +680,11 @@ fn parse_maps(data: &[u8]) -> Result<(RequestType, usize), String> {
         i += 1;
     }
 
-    let num_of_entries: usize = match u64::from_ascii(&len_bytes) {
+    let str_length = match String::from_utf8(len_bytes.to_vec()) {
+        Ok(s) => s,
+        Err(e) => return Err(e.to_string()),
+    };
+    let num_of_entries: usize = match str_length.parse::<u64>() {
         Ok(l) => l.try_into().unwrap(),
         Err(e) => return Err(e.to_string()),
     };
@@ -742,7 +763,11 @@ fn parse_sets(data: &[u8]) -> Result<(RequestType, usize), String> {
 
     i += 2;
 
-    let length: usize = match u64::from_ascii(&len_bytes) {
+    let str_length = match String::from_utf8(len_bytes.to_vec()) {
+        Ok(s) => s,
+        Err(e) => return Err(e.to_string()),
+    };
+    let length: usize = match str_length.parse::<u64>() {
         Ok(l) => l.try_into().unwrap(),
         Err(e) => return Err(e.to_string()),
     };
@@ -772,7 +797,7 @@ pub fn parse_request(data: &[u8]) -> Result<RequestType, String> {
     }
 
     let data_type = match get_data_type(data[i]) {
-        DataType::Unknown => return Err("unknow type".to_string()),
+        DataType::Unknown => return Err("unknown type".to_string()),
         t => t,
     };
     i += 1;

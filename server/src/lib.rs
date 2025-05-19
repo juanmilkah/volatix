@@ -1,5 +1,5 @@
 /* RESP 2.0*/
-#![feature(int_from_ascii)]
+
 use std::{
     sync::{Arc, mpsc},
     thread,

@@ -27,6 +27,7 @@ enum Command {
     SetwTtl,
     GetTtl,
     EntryStats,
+    SetMap,
 }
 
 fn get_value_type(value: &str) -> StorageValue {
@@ -83,13 +84,15 @@ fn config_entry(key: &str, value: &StorageValue) -> Result<ConfigEntry, String> 
 // For single commands -> a BulkString
 //    HELLO  -> Handshake command
 //    CONFOPTIONS
-// For normal commands -> an Array of RequestTypes
+// For normal commands -> an Array of RequestTypes::BulkString
 //    [SET key value]
 //    [GET key]
-// For list commands   -> An nested Array of RequestsTypes
+// For list commands   -> An nested Array of RequestsTypes::Array && BulkString
 //    [SETLIST [key,value], [key, value]]
 //    [GETLIST [key, key, key, ..]]
 //    [DELETELIST [key, key, key]]
+// For maps and json  -> An Array of RequestTypes::Bulkstring && RequestType::Maps
+//    [SETMAP  {key, value, key, value}]
 fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>) -> Vec<u8> {
     match req {
         RequestType::BulkString { data } => {
@@ -140,6 +143,7 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
                         "DELETELIST" => Command::DeleteList,
                         "GETLIST" => Command::GetList,
                         "SETLIST" => Command::SetList,
+                        "SETMAP" => Command::SetMap,
                         _ => unreachable!(),
                     }
                 }
@@ -471,6 +475,53 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
 
                     bulk_string_response(Some("SUCCESS"))
                 }
+
+                Command::SetMap => match &children[1] {
+                    RequestType::Map { children } => {
+                        let mut entries: HashMap<String, StorageValue> = HashMap::new();
+                        for (child_key, child_value) in children {
+                            let value = match child_value {
+                                RequestType::BulkString { data } => {
+                                    StorageValue::Text(String::from_utf8_lossy(data).to_string())
+                                }
+                                RequestType::SimpleString { data } => {
+                                    StorageValue::Text(String::from_utf8_lossy(data).to_string())
+                                }
+                                RequestType::Integer { data } => {
+                                    let int_str = match String::from_utf8(data.to_vec()) {
+                                        Ok(s) => s,
+                                        Err(e) => return bulk_error_response(&e.to_string()),
+                                    };
+                                    let int = match int_str.parse::<i64>() {
+                                        Ok(i) => i,
+                                        Err(e) => return bulk_error_response(&e.to_string()),
+                                    };
+                                    StorageValue::Int(int)
+                                }
+                                RequestType::BigNumber { data } => {
+                                    let int = String::from_utf8_lossy(data).to_string();
+                                    let float = match int.parse::<f64>() {
+                                        Ok(f) => f,
+                                        Err(_) => {
+                                            return bulk_error_response("Invalid float value");
+                                        }
+                                    };
+                                    StorageValue::Float(float)
+                                }
+                                RequestType::Boolean { data } => StorageValue::Bool(*data),
+                                _ => {
+                                    return bulk_error_response("Unsupported json value type");
+                                }
+                            };
+
+                            entries.insert(child_key.clone(), value);
+                        }
+
+                        storage.write().insert_entries(entries);
+                        bulk_string_response(Some("SUCCESS"))
+                    }
+                    _ => bulk_error_response("Unsuported format for SETMAP"),
+                },
             }
         }
         _ => unreachable!("later"),

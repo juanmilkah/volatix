@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     fmt::Display,
     fs::File,
-    io::{BufReader, BufWriter, Read},
+    io::{self, BufReader, BufWriter, Read},
     path::Path,
     time::{Duration, SystemTime},
 };
@@ -62,19 +62,21 @@ pub struct StorageEntry {
     pub access_count: usize,
     pub entry_size: usize,
     pub ttl: Duration,
+    pub compressed: bool,
 }
 
 impl Display for StorageEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Value: {}, Created_at: {:?}, Last accessed: {:?}, Access Count: {}, Entry size: {} Ttl: {}",
+            "Value: {}, Created_at: {:?}, Last accessed: {:?}, Access Count: {}, Entry size: {}, Ttl: {}, Compressed: {}",
             self.value,
             self.created_at,
             self.last_accessed,
             self.access_count,
             self.entry_size,
-            self.ttl.as_secs()
+            self.ttl.as_secs(),
+            self.compressed,
         )
     }
 }
@@ -86,6 +88,10 @@ impl StorageEntry {
             .expect("clock gone backwards")
             > self.ttl
     }
+
+    fn decompress(&mut self) -> io::Result<()> {
+        unimplemented!("a later feature");
+    }
 }
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
@@ -93,14 +99,39 @@ pub struct StorageOptions {
     pub ttl: Duration,
     pub max_capacity: u64,
     pub eviction_policy: EvictionPolicy,
+    pub compression: Compression,
+    pub compression_threshold: usize,
+}
+
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+pub enum Compression {
+    Enabled,
+    Disabled,
+}
+
+impl Display for Compression {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Compression::Enabled => write!(f, "enabled"),
+            Compression::Disabled => write!(f, "disabled"),
+        }
+    }
 }
 
 impl StorageOptions {
-    pub fn new(ttl: Duration, max_cap: u64, evict_policy: &EvictionPolicy) -> Self {
+    pub fn new(
+        ttl: Duration,
+        max_cap: u64,
+        evict_policy: &EvictionPolicy,
+        compression: &Compression,
+        compression_threshold: usize,
+    ) -> Self {
         Self {
             ttl,
             max_capacity: max_cap,
             eviction_policy: *evict_policy,
+            compression: *compression,
+            compression_threshold,
         }
     }
 }
@@ -111,6 +142,8 @@ impl Default for StorageOptions {
             ttl: Duration::from_secs(60 * 60 * 24), // 24 hrs
             max_capacity: 1000,
             eviction_policy: EvictionPolicy::default(),
+            compression: Compression::Disabled,
+            compression_threshold: 0,
         }
     }
 }
@@ -119,10 +152,12 @@ impl Display for StorageOptions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "GLOBALTTL: {}, MAXCAP: {}, EVICTPOLICY: {}",
+            "GLOBALTTL: {}, MAXCAP: {}, EVICTPOLICY: {}, COMPRESSION: {}, COMPRESSIONTHRESHOLD: {}",
             self.ttl.as_secs(),
             self.max_capacity,
-            self.eviction_policy
+            self.eviction_policy,
+            self.compression,
+            self.compression_threshold,
         )
     }
 }
@@ -134,7 +169,6 @@ pub struct StorageStats {
     pub misses: usize,
     pub evictions: usize,
     pub expired_removals: usize,
-    // pub avg_lookup_time: Duration,
 }
 
 impl Display for StorageStats {
@@ -172,6 +206,8 @@ pub enum ConfigEntry {
     EvictPolicy(EvictionPolicy),
     GlobalTtl(u64),
     MaxCapacity(u64),
+    Compression(Compression),
+    CompressionThreshold(usize),
 }
 
 impl Display for ConfigEntry {
@@ -180,6 +216,8 @@ impl Display for ConfigEntry {
             ConfigEntry::EvictPolicy(e) => write!(f, "EVICTPOLICY: {e}"),
             ConfigEntry::GlobalTtl(t) => write!(f, "GLOBALTTL: {t}"),
             ConfigEntry::MaxCapacity(c) => write!(f, "MAXCAP: {c}"),
+            ConfigEntry::Compression(b) => write!(f, "COMPRESSION: {b}"),
+            ConfigEntry::CompressionThreshold(s) => write!(f, "COMPRESSIONTHRESHOLD: {s}"),
         }
     }
 }
@@ -199,6 +237,12 @@ impl Storage {
                 self.stats.hits += 1;
                 entry.access_count += 1;
                 entry.last_accessed = SystemTime::now();
+                if entry.compressed {
+                    match entry.decompress() {
+                        Ok(()) => (),
+                        Err(e) => eprintln!("{e}"),
+                    }
+                }
                 return Some(entry.clone());
             }
             self.remove_expired();
@@ -240,6 +284,13 @@ impl Storage {
 
         let timestamp = SystemTime::now();
         let entry_size = value.size_in_bytes();
+        let (value, compressed) = match self.options.compression {
+            Compression::Enabled => {
+                unimplemented!("a later feature");
+            }
+            Compression::Disabled => (value, false),
+        };
+
         let entry = StorageEntry {
             value,
             created_at: timestamp,
@@ -247,6 +298,7 @@ impl Storage {
             access_count: 0,
             entry_size,
             ttl: self.options.ttl,
+            compressed,
         };
         self.store.insert(key, entry);
         self.remove_expired();
@@ -259,6 +311,12 @@ impl Storage {
     pub fn insert_with_ttl(&mut self, key: String, value: StorageValue, ttl: Duration) {
         let entry_size = value.size_in_bytes();
         let now = SystemTime::now();
+        let (value, compressed) = match self.options.compression {
+            Compression::Enabled => {
+                unimplemented!("a later feature");
+            }
+            Compression::Disabled => (value, false),
+        };
 
         let entry = StorageEntry {
             value,
@@ -267,6 +325,7 @@ impl Storage {
             access_count: 0,
             entry_size,
             ttl,
+            compressed,
         };
 
         self.store.insert(key, entry);
@@ -402,21 +461,21 @@ impl Storage {
             "EVICTPOLICY" => Some(ConfigEntry::EvictPolicy(self.options.eviction_policy)),
             "MAXCAP" => Some(ConfigEntry::MaxCapacity(self.options.max_capacity)),
             "GLOBALTTL" => Some(ConfigEntry::GlobalTtl(self.options.ttl.as_secs())),
+            "COMPRESSION" => Some(ConfigEntry::Compression(self.options.compression)),
+            "COMPRESSIONTHRESHOLD" => Some(ConfigEntry::CompressionThreshold(
+                self.options.compression_threshold,
+            )),
             _ => None,
         }
     }
 
     pub fn set_config_entry(&mut self, entry: &ConfigEntry) {
         match entry {
-            ConfigEntry::EvictPolicy(p) => {
-                self.options.eviction_policy = *p;
-            }
-            ConfigEntry::GlobalTtl(t) => {
-                self.options.ttl = Duration::from_secs(*t);
-            }
-            ConfigEntry::MaxCapacity(c) => {
-                self.options.max_capacity = *c;
-            }
+            ConfigEntry::EvictPolicy(p) => self.options.eviction_policy = *p,
+            ConfigEntry::GlobalTtl(t) => self.options.ttl = Duration::from_secs(*t),
+            ConfigEntry::MaxCapacity(c) => self.options.max_capacity = *c,
+            ConfigEntry::Compression(b) => self.options.compression = *b,
+            ConfigEntry::CompressionThreshold(s) => self.options.compression_threshold = *s,
         }
     }
 
@@ -462,7 +521,7 @@ impl Storage {
 mod tests {
     use std::{collections::HashMap, thread, time::Duration};
 
-    use crate::{ConfigEntry, EvictionPolicy, StorageValue};
+    use crate::{Compression, ConfigEntry, EvictionPolicy, StorageValue};
 
     use super::{Storage, StorageOptions};
 
@@ -480,7 +539,13 @@ mod tests {
     fn test_custom_options() {
         let ttl = Duration::from_secs(30);
         let max_capacity = 50;
-        let options = StorageOptions::new(ttl, max_capacity, &EvictionPolicy::Oldest);
+        let options = StorageOptions::new(
+            ttl,
+            max_capacity,
+            &EvictionPolicy::Oldest,
+            &Compression::Disabled,
+            0,
+        );
         let storage = Storage::new(options);
 
         assert_eq!(storage.options.ttl, Duration::from_secs(30));
@@ -524,7 +589,13 @@ mod tests {
     // Test capacity enforcement
     #[test]
     fn test_capacity_enforcement() {
-        let options = StorageOptions::new(Duration::from_secs(3600), 3, &EvictionPolicy::Oldest);
+        let options = StorageOptions::new(
+            Duration::from_secs(3600),
+            3,
+            &EvictionPolicy::Oldest,
+            &Compression::Disabled,
+            0,
+        );
         let mut storage = Storage::new(options);
         let v1 = StorageValue::Text("value1".to_string());
         let v2 = StorageValue::Text("value2".to_string());
@@ -552,7 +623,13 @@ mod tests {
     // Test TTL expiration
     #[test]
     fn test_ttl_expiration() {
-        let options = StorageOptions::new(Duration::from_millis(100), 10, &EvictionPolicy::Oldest);
+        let options = StorageOptions::new(
+            Duration::from_millis(100),
+            10,
+            &EvictionPolicy::Oldest,
+            &Compression::Disabled,
+            0,
+        );
         let mut storage = Storage::new(options);
         let v1 = StorageValue::Text("value1".to_string());
         let v2 = StorageValue::Text("value2".to_string());
@@ -576,7 +653,13 @@ mod tests {
     // Test that remove_expired correctly handles multiple expired keys
     #[test]
     fn test_multiple_expired_keys() {
-        let options = StorageOptions::new(Duration::from_millis(100), 10, &EvictionPolicy::Oldest);
+        let options = StorageOptions::new(
+            Duration::from_millis(100),
+            10,
+            &EvictionPolicy::Oldest,
+            &crate::Compression::Disabled,
+            0,
+        );
         let mut storage = Storage::new(options);
         let v1 = StorageValue::Text("value1".to_string());
         let v2 = StorageValue::Text("value2".to_string());
@@ -601,7 +684,13 @@ mod tests {
     // Test the existing remove_expired function directly
     #[test]
     fn test_remove_expired_directly() {
-        let options = StorageOptions::new(Duration::from_millis(100), 5, &EvictionPolicy::Oldest);
+        let options = StorageOptions::new(
+            Duration::from_millis(100),
+            5,
+            &EvictionPolicy::Oldest,
+            &Compression::Disabled,
+            0,
+        );
         let mut storage = Storage::new(options);
         let v1 = StorageValue::Text("value1".to_string());
         let v2 = StorageValue::Text("value2".to_string());
@@ -623,7 +712,13 @@ mod tests {
     // Test that oldest entries are removed when capacity is reached
     #[test]
     fn test_remove_oldest_key() {
-        let options = StorageOptions::new(Duration::from_secs(3600), 3, &EvictionPolicy::Oldest);
+        let options = StorageOptions::new(
+            Duration::from_secs(3600),
+            3,
+            &EvictionPolicy::Oldest,
+            &Compression::Disabled,
+            0,
+        );
         let mut storage = Storage::new(options);
         let v1 = StorageValue::Text("value1".to_string());
         let v2 = StorageValue::Text("value2".to_string());
@@ -769,7 +864,13 @@ mod tests {
 
     #[test]
     fn test_eviction_policy_lru() {
-        let options = StorageOptions::new(Duration::from_secs(10), 2, &EvictionPolicy::Oldest);
+        let options = StorageOptions::new(
+            Duration::from_secs(10),
+            2,
+            &EvictionPolicy::Oldest,
+            &Compression::Disabled,
+            0,
+        );
         let mut storage = Storage::new(options);
         storage.set_config_entry(&ConfigEntry::EvictPolicy(EvictionPolicy::LRU));
         let v1 = StorageValue::Text("value1".to_string());
@@ -787,7 +888,13 @@ mod tests {
 
     #[test]
     fn test_eviction_policy_lfu() {
-        let options = StorageOptions::new(Duration::from_secs(10), 2, &EvictionPolicy::Oldest);
+        let options = StorageOptions::new(
+            Duration::from_secs(10),
+            2,
+            &EvictionPolicy::Oldest,
+            &Compression::Disabled,
+            0,
+        );
         let mut storage = Storage::new(options);
         storage.set_config_entry(&ConfigEntry::EvictPolicy(EvictionPolicy::LFU));
 
@@ -806,7 +913,13 @@ mod tests {
 
     #[test]
     fn test_eviction_policy_size_aware() {
-        let options = StorageOptions::new(Duration::from_secs(10), 2, &EvictionPolicy::Oldest);
+        let options = StorageOptions::new(
+            Duration::from_secs(10),
+            2,
+            &EvictionPolicy::Oldest,
+            &Compression::Disabled,
+            0,
+        );
         let mut storage = Storage::new(options);
         storage.set_config_entry(&ConfigEntry::EvictPolicy(EvictionPolicy::SizeAware));
         let v1 = StorageValue::Text("v".to_string());

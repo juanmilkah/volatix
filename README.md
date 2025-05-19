@@ -32,6 +32,7 @@ DELETE key
 
 SETLIST [key, value, key, value, ..]
 SETLIST {key, value, ..}
+SETMAP  {"key" : "value", "key": "value"}
 
 GETLIST {key, key, ..}
 GETLIST [key, key, ..]
