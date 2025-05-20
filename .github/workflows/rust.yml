@@ -1,51 +1,47 @@
 name: Rust CI
-
 on:
   push:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
-
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
 
 jobs:
   test:
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v3
-
-    - name: Cache cargo registry
+    
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt, clippy
+    
+    - name: Cache dependencies
       uses: actions/cache@v3
       with:
-        path: ~/.cargo/registry
-        key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-
-    - name: Cache cargo index
-      uses: actions/cache@v3
-      with:
-        path: ~/.cargo/git
-        key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
-
-    - name: Cache cargo build
-      uses: actions/cache@v3
-      with:
-        path: target
-        key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
-
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+    
     - name: Check formatting
       run: cargo fmt -- --check
-
+    
     - name: Run clippy
       run: cargo clippy -- -D warnings
-
+    
     - name: Build
       run: cargo build --verbose
-
+    
     - name: Build release binary
       run: cargo build --release --bin server
-
+    
     - name: Start server for integration tests
       run: |
         cargo run --release --bin server &
@@ -53,11 +49,11 @@ jobs:
         echo "SERVER_PID=$SERVER_PID" >> $GITHUB_ENV
         # Wait for server to be ready
         sleep 5 # five seconds
-
+    
     - name: Run tests + Integration tests
       run: |
         cargo test --verbose
-
+    
     - name: Stop server
       if: always()
       run: |

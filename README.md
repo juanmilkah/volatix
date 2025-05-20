@@ -57,6 +57,10 @@ GETTTL key
 ```bash
 - MAXCAP      # U64
 - GLOBALTTL   # U64
+- COMPRESSION # Compress values past comp threshold
+  - ENABLE
+  - DISABLE  # default
+- COMPTHRESHOLD # U64, size of value in bytes
 - EVICTPOLICY #The storage layer eviction policy
   - OLDEST    # Oldest first
   - LFU       # Least Frequently Used

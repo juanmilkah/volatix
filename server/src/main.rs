@@ -8,9 +8,9 @@ use std::{
 };
 
 use server_lib::{
-    ConfigEntry, EvictionPolicy, RequestType, Storage, StorageOptions, StorageValue, ThreadPool,
-    batch_entries_response, boolean_response, bulk_error_response, bulk_string_response,
-    integer_response, null_response, parse_request,
+    Compression, ConfigEntry, EvictionPolicy, RequestType, Storage, StorageOptions, StorageValue,
+    ThreadPool, batch_entries_response, boolean_response, bulk_error_response,
+    bulk_string_response, integer_response, null_response, parse_request,
 };
 
 enum Command {
@@ -46,7 +46,7 @@ fn get_value_type(value: &str) -> StorageValue {
 }
 
 fn config_entry(key: &str, value: &StorageValue) -> Result<ConfigEntry, String> {
-    match key {
+    match key.to_uppercase().as_str() {
         "MAXCAP" => match value {
             StorageValue::Int(n) => {
                 if *n < 0 {
@@ -74,6 +74,20 @@ fn config_entry(key: &str, value: &StorageValue) -> Result<ConfigEntry, String> 
                 _ => Err("Invalid EVICTPOLICY value".to_string()),
             },
             _ => Err("Invalid EVICTPOLICY value".to_string()),
+        },
+
+        "COMPRESSION" => match value {
+            StorageValue::Text(txt) => match txt.to_uppercase().as_str() {
+                "ENABLE" => Ok(ConfigEntry::Compression(Compression::Enabled)),
+                "DISABLE" => Ok(ConfigEntry::Compression(Compression::Disabled)),
+                _ => Err("Invalid COMPRESSION value".to_string()),
+            },
+            _ => Err("Invalid COMPRESSION value".to_string()),
+        },
+
+        "COMPTHRESHOLD" => match value {
+            StorageValue::Int(n) => Ok(ConfigEntry::CompressionThreshold(*n as usize)),
+            _ => Err("Invalid COMPRESSION THRESHOLD value".to_string()),
         },
 
         _ => Err("Invalid CONFSET key".to_string()),
@@ -198,9 +212,10 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
                                 RequestType::BulkString { data } => {
                                     let entry_value = String::from_utf8_lossy(data).to_string();
                                     let entry_value = get_value_type(&entry_value);
-                                    storage.write().insert_entry(key, entry_value);
-
-                                    bulk_string_response(Some("SUCCESS"))
+                                    match storage.write().insert_entry(key, entry_value) {
+                                        Ok(()) => bulk_string_response(Some("SUCCESS")),
+                                        Err(e) => bulk_error_response(&e),
+                                    }
                                 }
                                 _ => bulk_error_response("Invalid request type for SET value"),
                             }
@@ -471,7 +486,9 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
                         }
                     }
 
-                    storage.write().insert_entries(entries);
+                    if let Err(e) = storage.write().insert_entries(entries) {
+                        return bulk_error_response(&e);
+                    }
 
                     bulk_string_response(Some("SUCCESS"))
                 }
@@ -517,7 +534,9 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
                             entries.insert(child_key.clone(), value);
                         }
 
-                        storage.write().insert_entries(entries);
+                        if let Err(e) = storage.write().insert_entries(entries) {
+                            return bulk_error_response(&e);
+                        }
                         bulk_string_response(Some("SUCCESS"))
                     }
                     _ => bulk_error_response("Unsuported format for SETMAP"),

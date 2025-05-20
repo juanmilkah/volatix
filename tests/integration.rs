@@ -147,7 +147,7 @@ mod integration {
         let addr: SocketAddr = "127.0.0.1:7878".parse().unwrap();
         let stream = TcpStream::connect(addr).unwrap();
 
-        let set_req = array!("SET", "foo", "bar");
+        let set_req = array!("SET", "foo1", "bar");
 
         let resp = send_request(&stream, &set_req).unwrap();
         let success_resp = RequestType::BulkString {
@@ -155,7 +155,7 @@ mod integration {
         };
         assert_eq!(resp, success_resp);
 
-        let get_req = array!("GET", "foo");
+        let get_req = array!("GET", "foo1");
         let resp = send_request(&stream, &get_req).unwrap();
         assert_eq!(
             resp,
@@ -164,7 +164,7 @@ mod integration {
             }
         );
 
-        let delete_req = array!("DELETE", "foo");
+        let delete_req = array!("DELETE", "foo1");
         let resp = send_request(&stream, &delete_req).unwrap();
         assert_eq!(resp, success_resp)
     }
@@ -214,5 +214,41 @@ mod integration {
 
         let resp = send_request(&stream, &deletelist_req).unwrap();
         assert_eq!(resp, success_resp);
+    }
+
+    #[test]
+    fn test_compression() {
+        let addr: SocketAddr = "127.0.0.1:7878".parse().unwrap();
+        let stream = TcpStream::connect(addr).unwrap();
+
+        let set_comp = array!("CONFSET", "COMPRESSION", "enable");
+        let resp = send_request(&stream, &set_comp).unwrap();
+        let success_resp = RequestType::BulkString {
+            data: b"SUCCESS".to_vec(),
+        };
+        assert_eq!(resp, success_resp);
+
+        let set_threshold = array!("CONFSET", "COMPTHRESHOLD", "30");
+        let resp = send_request(&stream, &set_threshold).unwrap();
+        assert_eq!(resp, success_resp);
+
+        let long_input = "bar".repeat(20);
+        let set_req = array!("SET", "foo2", &long_input);
+
+        let resp = send_request(&stream, &set_req).unwrap();
+        assert_eq!(resp, success_resp);
+
+        let get_req = array!("GET", "foo2");
+        let resp = send_request(&stream, &get_req).unwrap();
+        assert_eq!(
+            resp,
+            RequestType::BulkString {
+                data: b"bar".repeat(20).to_vec()
+            }
+        );
+
+        let delete_req = array!("DELETE", "foo2");
+        let resp = send_request(&stream, &delete_req).unwrap();
+        assert_eq!(resp, success_resp)
     }
 }

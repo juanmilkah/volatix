@@ -763,6 +763,15 @@ fn help() {
     println!("  DELETELIST [key key, ..]");
     println!();
     println!("  CONFOPTIONS");
+    println!("    MAXCAP <u64>");
+    println!("    GLOBALTTL <u64>");
+    println!("    COMPRESSION <enable|disable>");
+    println!("    COMPTHRESHOLD <u64>");
+    println!("    EVICTPOLICY # Eviction policy");
+    println!("      RFU # Least frequently used");
+    println!("      LFA # Least frequently Accessed");
+    println!("      OLDEST");
+    println!("      SIZEAWARE # Largest first");
     println!("  CONFSET key value");
     println!("  CONFGET key");
     println!();
