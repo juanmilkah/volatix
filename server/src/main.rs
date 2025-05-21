@@ -354,9 +354,11 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
                                                     );
                                                 }
                                             };
-                                            storage.write().insert_with_ttl(key, entry_value, ttl);
+                                            match storage.write().insert_with_ttl(key, entry_value, ttl){
+                                                Ok(())=> bulk_string_response(Some("SUCCESS")),
+                                                Err(e)=> bulk_error_response(&e),
+                                            }
 
-                                            bulk_string_response(Some("SUCCESS"))
                                         }
                                         _ => bulk_error_response("Invalid SETWTTL ttl"),
                                     }
