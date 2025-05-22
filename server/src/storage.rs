@@ -256,6 +256,10 @@ impl Storage {
         }
     }
 
+    pub fn flush(&mut self) {
+        self.store.clear();
+    }
+
     pub fn get_entry(&mut self, key: &str) -> Option<StorageEntry> {
         if let Some(entry) = self.store.get_mut(key) {
             if !entry.is_expired() {
@@ -271,6 +275,7 @@ impl Storage {
                         }
                     }
                 }
+
                 return Some(entry.clone());
             }
             self.remove_expired();

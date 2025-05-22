@@ -24,10 +24,10 @@ enum Command {
     DeleteList,
     ConfSet,
     ConfGet,
-    ExtendTtl,
+    Expire,
     SetwTtl,
     GetTtl,
-    EntryStats,
+    Dump,
     SetMap,
 }
 
@@ -131,6 +131,18 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
 
                     bulk_string_response(Some(&options.to_string()))
                 }
+
+                "FLUSH" => {
+                    storage.write().flush();
+
+                    bulk_string_response(Some("SUCCESS"))
+                }
+
+                "EVICTNOW" => {
+                    storage.write().evict_entries();
+
+                    bulk_string_response(Some("SUCCESS"))
+                }
                 _ => null_response(),
             }
         }
@@ -151,9 +163,9 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
                         "EXISTS" => Command::Exists,
                         "CONFGET" => Command::ConfGet,
                         "CONFSET" => Command::ConfSet,
-                        "ENTRYSTATS" => Command::EntryStats,
+                        "DUMP" => Command::Dump,
                         "GETTTL" => Command::GetTtl,
-                        "EXTENDTTL" => Command::ExtendTtl,
+                        "EXPIRE" => Command::Expire,
                         "SETWTTL" => Command::SetwTtl,
                         "DELETELIST" => Command::DeleteList,
                         "GETLIST" => Command::GetList,
@@ -240,7 +252,7 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
                     }
                 }
 
-                Command::EntryStats => {
+                Command::Dump => {
                     if children.len() < 2 {
                         return bulk_error_response("Command missing some arguments");
                     }
@@ -256,7 +268,7 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
                                 None => null_response(),
                             }
                         }
-                        _ => bulk_error_response("Invalid request type for ENTRYSTATS key"),
+                        _ => bulk_error_response("Invalid request type for Dump key"),
                     }
                 }
 
@@ -374,7 +386,7 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
                     }
                 }
 
-                Command::ExtendTtl => {
+                Command::Expire => {
                     if children.len() < 3 {
                         return bulk_error_response("Command missing some arguments");
                     }
@@ -390,7 +402,7 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
                                         StorageValue::Int(n) => n,
                                         _ => {
                                             return bulk_error_response(
-                                                "Invalid EXTENDTTL addition_tll",
+                                                "Invalid EXPIRE addition_tll",
                                             );
                                         }
                                     };
@@ -402,12 +414,10 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
 
                                     bulk_string_response(Some("SUCCESS"))
                                 }
-                                _ => {
-                                    bulk_error_response("Invalid request type for EXTENDTTL value")
-                                }
+                                _ => bulk_error_response("Invalid request type for EXPIRE value"),
                             }
                         }
-                        _ => bulk_error_response("Invalid request type for EXTENDTTL key"),
+                        _ => bulk_error_response("Invalid request type for EXPIRE key"),
                     }
                 }
 

@@ -29,8 +29,7 @@ impl Worker {
                 let job = receiver.lock().recv();
                 match job {
                     Ok(job) => job(),
-                    Err(err) => {
-                        eprintln!("ERROR: {err}");
+                    Err(_) => {
                         break;
                     }
                 }

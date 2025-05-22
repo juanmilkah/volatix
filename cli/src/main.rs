@@ -47,7 +47,7 @@ enum Command {
     },
 
     // allow increment and decrement by using i64
-    ExtendTtl {
+    Expire {
         key: String,
         addition: i64,
     },
@@ -62,11 +62,14 @@ enum Command {
     ConfGet {
         key: String,
     },
-    EntryStats {
+    Dump {
         key: String,
     },
 
     ConfOptions,
+
+    EvictNow,
+    Flush,
 }
 
 fn parse_arg(chars: &[char], pointer: &mut usize, arg_name: &str) -> Result<String, String> {
@@ -325,14 +328,14 @@ fn parse_line(line: &str) -> Command {
             Err(e) => Command::ParseError(e),
         },
 
-        "EXTENDTTL" => match parse_arg(&chars, &mut pointer, "key") {
+        "EXPIRE" => match parse_arg(&chars, &mut pointer, "key") {
             Ok(key) => match parse_arg(&chars, &mut pointer, "ttl") {
                 Ok(v) => {
                     let ttl = match v.parse::<i64>() {
                         Ok(v) => v,
                         Err(e) => return Command::ParseError(format!("ERROR: {e}")),
                     };
-                    Command::ExtendTtl { key, addition: ttl }
+                    Command::Expire { key, addition: ttl }
                 }
                 Err(e) => Command::ParseError(e),
             },
@@ -359,12 +362,16 @@ fn parse_line(line: &str) -> Command {
             Err(e) => Command::ParseError(e),
         },
 
-        "ENTRYSTATS" => match parse_arg(&chars, &mut pointer, "key") {
-            Ok(key) => Command::EntryStats { key },
+        "DUMP" => match parse_arg(&chars, &mut pointer, "key") {
+            Ok(key) => Command::Dump { key },
             Err(e) => Command::ParseError(e),
         },
 
         "CONFOPTIONS" => Command::ConfOptions,
+
+        "EVICTNOW" => Command::EvictNow,
+
+        "FLUSH" => Command::Flush,
 
         _ => Command::ParseError(format!("Unknown command: {cmd_str}")),
     }
@@ -415,6 +422,10 @@ fn serialize_request(command: &Command) -> Vec<u8> {
     // the command's name. Subsequent elements of the array are the arguments
     // for the command.
     match command {
+        Command::Flush => bstring("FLUSH").as_bytes().to_vec(),
+
+        Command::EvictNow => bstring("EVICTNOW").as_bytes().to_vec(),
+
         Command::Hello => bstring("HELLO").as_bytes().to_vec(),
 
         Command::Get { key } => {
@@ -553,13 +564,13 @@ fn serialize_request(command: &Command) -> Vec<u8> {
             arr.as_bytes().to_vec()
         }
 
-        Command::ExtendTtl { key, addition } => {
+        Command::Expire { key, addition } => {
             let mut arr = String::new();
 
             arr.push('*');
             arr.push_str(&3.to_string());
             arr.push_str("\r\n");
-            arr.push_str(&bstring("EXTENDTTL"));
+            arr.push_str(&bstring("EXPIRE"));
             arr.push_str(&bstring(key));
             arr.push_str(&integer(*addition));
 
@@ -573,8 +584,8 @@ fn serialize_request(command: &Command) -> Vec<u8> {
             arr.as_bytes().to_vec()
         }
 
-        Command::EntryStats { key } => {
-            let v = [bstring("ENTRYSTATS"), bstring(key)];
+        Command::Dump { key } => {
+            let v = [bstring("DUMP"), bstring(key)];
             let arr = array(&v);
             arr.as_bytes().to_vec()
         }
@@ -592,6 +603,7 @@ fn serialize_request(command: &Command) -> Vec<u8> {
 enum Response {
     SimpleString { data: String },
     SimpleError { data: String },
+    Boolean { data: bool },
     Integer { data: i64 },
     BigNumber { data: f64 },
     Null,
@@ -613,6 +625,7 @@ impl Display for Response {
                 write!(f, "{arr:?}")
             }
             Self::SimpleError { data } => write!(f, "{data}"),
+            Self::Boolean { data } => write!(f, "{data}"),
         }
     }
 }
@@ -655,6 +668,8 @@ fn deserialize_response(resp: &[u8]) -> Result<Response, String> {
         RequestType::BulkError { data } => Ok(Response::SimpleError {
             data: String::from_utf8_lossy(data).to_string(),
         }),
+
+        RequestType::Boolean { data } => Ok(Response::Boolean { data: *data }),
 
         RequestType::Array { children } => {
             let mut outer_vec = Vec::new();
@@ -750,38 +765,60 @@ fn handshake(mut stream: &TcpStream) -> Result<(), String> {
         _ => Err("Invalid response type for handshake".to_string()),
     }
 }
+
 fn help() {
-    println!("USAGE: ");
-    println!("  SET key<string> value<any>");
-    println!("  GET key");
-    println!("  DELETE key");
+    println!("USAGE:");
     println!();
-    println!("  SETLIST [key, value, ..]");
-    println!("  SETLIST {{key, value, ..}}");
-    println!("  SETMAP   {{ \"key\": \"value\"}}");
-    println!("  GETLIST [key, key, ..]");
-    println!("  DELETELIST [key key, ..]");
+
+    println!("  Basic Operations:");
+    println!("    SET <key: string> <value: any>         # Set a single key-value pair");
+    println!("    GET <key>                              # Get the value for a key");
+    println!("    DELETE <key>                           # Delete a key");
+    println!("    EXISTS <key>                           # Check if key exist");
+    println!("    FLUSH                                  # Clear the database");
     println!();
-    println!("  CONFOPTIONS");
-    println!("    MAXCAP <u64>");
-    println!("    GLOBALTTL <u64>");
-    println!("    COMPRESSION <enable|disable>");
-    println!("    COMPTHRESHOLD <u64>");
-    println!("    EVICTPOLICY # Eviction policy");
-    println!("      RFU # Least frequently used");
-    println!("      LFA # Least frequently Accessed");
-    println!("      OLDEST");
-    println!("      SIZEAWARE # Largest first");
-    println!("  CONFSET key value");
-    println!("  CONFGET key");
+
+    println!("  Batch Operations:");
+    println!(
+        "    SETLIST [key, value, ...]              # Set multiple key-value pairs (array syntax)"
+    );
+    println!(
+        "    SETLIST {{key, value, ...}}              # Set multiple key-value pairs (map syntax)"
+    );
+    println!("    SETMAP {{\"key\": \"value\"}}                # Set a map of key-value pairs");
+    println!("    GETLIST [key, key, ...]                # Get values for multiple keys");
+    println!("    DELETELIST [key, key, ...]             # Delete multiple keys");
     println!();
-    println!("  GETSTATS");
-    println!("  RESETSTATS");
-    println!("  ENTRYSTATS key");
+
+    println!("  Configuration:");
+    println!("    CONFOPTIONS                            # List configurable options");
+    println!("      MAXCAP <u64>                         # Max entries in DB");
+    println!("      GLOBALTTL <u64>                      # Default TTL for entries");
+    println!("      COMPRESSION <enable|disable>         # Enable/disable compression");
+    println!("      COMPTHRESHOLD <u64>                  # Size threshold for compression");
+    println!("      EVICTPOLICY                          # Eviction policy:");
+    println!("        RFU                                # Rarely frequently used");
+    println!("        LFA                                # Least frequently accessed");
+    println!("        OLDEST                             # Oldest entry first");
+    println!("        SIZEAWARE                          # Evict largest first");
+    println!("    CONFSET <key> <value>                  # Set a config value");
+    println!("    CONFGET <key>                          # Get a config value");
     println!();
-    println!("  SETWTTL key value<u64>");
-    println!("  EXTENDTTL key value<i64>");
-    println!("  GETTTL key");
+
+    println!("  Stats:");
+    println!("    GETSTATS                               # Get global stats");
+    println!("    RESETSTATS                             # Reset global stats");
+    println!("    DUMP <key>                             # Get stats for a specific entry");
+    println!();
+
+    println!("  TTL (Time-to-Live):");
+    println!("    SETWTTL <key> <ttl: u64>               # Set key with TTL (in seconds)");
+    println!("    EXPIRE <key> <delta: i64>              # Extend or reduce TTL");
+    println!("    GETTTL <key>                           # Get remaining TTL for key");
+    println!(
+        "    EVICTNOW <key>                         # Trigger Eviction using current eviction policy"
+    );
+    println!();
 }
 
 fn main() -> Result<(), String> {
@@ -795,8 +832,10 @@ fn main() -> Result<(), String> {
         }
     };
 
-    println!("VOLATIX CLI!!");
-    println!("If stuck try `HELP` and `EXIT`");
+    println!("volatix cli repl");
+    println!("If stuck try `HELP`");
+    println!("To end session `QUIT` or `EXIT`");
+    println!("lowercase is fine too :)");
 
     let stdin = stdin();
     let mut line = String::new();
@@ -812,7 +851,8 @@ fn main() -> Result<(), String> {
 
     loop {
         line.clear();
-        print!("> ");
+        let prompt = "volatix> ";
+        print!("{prompt}");
         let _ = stdout.flush();
         if let Err(e) = stdin.read_line(&mut line) {
             eprintln!("ERROR: {e}");
@@ -868,6 +908,7 @@ fn main() -> Result<(), String> {
             Response::Integer { data } => println!("{data}"),
             Response::BigNumber { data } => println!("{data}"),
             Response::Null => println!("NULL"),
+            Response::Boolean { data } => println!("{data}"),
             Response::Array { data } => {
                 // do this the rookie way for now;;
                 // fix it if you can :)

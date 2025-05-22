@@ -51,6 +51,9 @@ CONFGET key
 SETWTTL key value ttl  # u64 ttl
 EXTENDTTL key value # i64 addition 
 GETTTL key
+
+FLUSH # Clear db
+EVICTNOW # Trigger eviction using current eviction policy
 ```
 
 ### Config Options
