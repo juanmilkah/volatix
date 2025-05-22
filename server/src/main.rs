@@ -1,9 +1,10 @@
 use std::{
     collections::HashMap,
     env::args,
-    io::{Read, Write},
+    io::{ErrorKind, Read, Write},
     net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream},
-    sync::Arc,
+    sync::{Arc, atomic::AtomicBool},
+    thread,
     time::Duration,
 };
 
@@ -130,7 +131,7 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
 
                     bulk_string_response(Some(&options.to_string()))
                 }
-                _ => unreachable!(),
+                _ => null_response(),
             }
         }
 
@@ -158,10 +159,10 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
                         "GETLIST" => Command::GetList,
                         "SETLIST" => Command::SetList,
                         "SETMAP" => Command::SetMap,
-                        _ => unreachable!(),
+                        _ => return null_response(),
                     }
                 }
-                _ => unreachable!(),
+                _ => return null_response(),
             };
 
             match command {
@@ -354,11 +355,14 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
                                                     );
                                                 }
                                             };
-                                            match storage.write().insert_with_ttl(key, entry_value, ttl){
-                                                Ok(())=> bulk_string_response(Some("SUCCESS")),
-                                                Err(e)=> bulk_error_response(&e),
+                                            match storage.write().insert_with_ttl(
+                                                key,
+                                                entry_value,
+                                                ttl,
+                                            ) {
+                                                Ok(()) => bulk_string_response(Some("SUCCESS")),
+                                                Err(e) => bulk_error_response(&e),
                                             }
-
                                         }
                                         _ => bulk_error_response("Invalid SETWTTL ttl"),
                                     }
@@ -545,7 +549,7 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
                 },
             }
         }
-        _ => unreachable!("later"),
+        _ => null_response(),
     }
 }
 
@@ -579,7 +583,7 @@ fn handle_client(mut stream: TcpStream, storage: Arc<parking_lot::RwLock<Storage
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<_> = args().collect();
-    let mut thread_count = 4;
+    let mut thread_count = 5;
 
     for i in 1..args.len() {
         if args[i] == "--threads" && i + 1 < args.len() {
@@ -589,6 +593,7 @@ fn main() -> anyhow::Result<()> {
 
     let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 7878));
     let listener = TcpListener::bind(addr)?;
+    listener.set_nonblocking(true).expect("Setting NONBLOCKING");
     println!("Server listening on {addr}");
 
     let options = StorageOptions::default();
@@ -597,20 +602,33 @@ fn main() -> anyhow::Result<()> {
     storage.write().load_from_disk(persistent_path)?;
     let pool = ThreadPool::new(thread_count); // 4 threads
 
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
+    let running = Arc::new(AtomicBool::new(true));
+    let r = Arc::clone(&running);
+    ctrlc::set_handler(move || {
+        println!("Received Ctrl+C Interrupt Signal");
+        let r = Arc::clone(&running);
+        r.store(false, std::sync::atomic::Ordering::Relaxed);
+    })
+    .expect("setting up SIGINT handler");
+
+    while r.load(std::sync::atomic::Ordering::Relaxed) {
+        match listener.accept() {
+            Ok((stream, _)) => {
                 let storage = Arc::clone(&storage);
                 pool.execute(|| handle_client(stream, storage));
+            }
+            Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(100));
+                continue;
             }
             Err(e) => eprintln!("ERROR: {e}"),
         }
     }
 
     // TODO: Figure this out
-    // println!("Saving data to disk...");
-    // storage.write().save_to_disk(persistent_path)?;
-    // println!("Data saved successfully. Server shutdown complete.");
+    println!("Saving data to disk...");
+    storage.write().save_to_disk(persistent_path)?;
+    println!("Data saved successfully. Server shutdown complete.");
 
     Ok(())
 }

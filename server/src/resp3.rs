@@ -358,8 +358,7 @@ fn parse_arrays(data: &[u8]) -> Result<(RequestType, usize), String> {
                     DataType::SimpleString => parse_simple_strings(&data[i..])?,
                     DataType::SimpleError => parse_simple_errors(&data[i..])?,
                     DataType::Maps => parse_maps(&data[i..])?,
-                    DataType::Array => unreachable!(),
-                    _ => unimplemented!("todo"),
+                    _ => (RequestType::Null, 0),
                 };
 
                 i += consumed;
@@ -709,7 +708,7 @@ fn parse_maps(data: &[u8]) -> Result<(RequestType, usize), String> {
         let key = match key {
             RequestType::BulkString { data } => String::from_utf8_lossy(&data).to_string(),
             RequestType::SimpleString { data } => String::from_utf8_lossy(&data).to_string(),
-            _ => unimplemented!(),
+            _ => return Err("Invalid key type".to_string()),
         };
 
         entries.insert(key, value);
@@ -779,7 +778,7 @@ fn parse_sets(data: &[u8]) -> Result<(RequestType, usize), String> {
         let (entry, consumed) = parse_nested_entry(data)?;
         let entry = match entry {
             RequestType::BulkString { data } => data.to_vec(),
-            _ => unimplemented!("later"),
+            _ => return Err("Invalid set entry type".to_string()),
         };
 
         entries.insert(entry);

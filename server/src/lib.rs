@@ -71,9 +71,9 @@ impl ThreadPool {
 
 impl Drop for ThreadPool {
     fn drop(&mut self) {
+        // drop sender first
+        drop(self.sender.take());
         for worker in &mut self.workers {
-            // drop sender first
-            drop(self.sender.take());
             if let Some(thread) = worker.thread.take() {
                 thread.join().unwrap();
             }

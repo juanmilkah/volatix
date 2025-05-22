@@ -1,8 +1,8 @@
 use std::{
     collections::HashMap,
     fmt::Display,
-    fs::File,
-    io::{self, BufReader, BufWriter, Read},
+    fs::{File, OpenOptions},
+    io::{self, BufReader, BufWriter, Read, Write},
     path::Path,
     time::{Duration, SystemTime},
 };
@@ -308,48 +308,7 @@ impl Storage {
     }
 
     pub fn insert_entry(&mut self, key: String, value: StorageValue) -> Result<(), String> {
-        if self.is_full() {
-            self.evict_entries();
-        }
-
-        let timestamp = SystemTime::now();
-        let entry_size = value.size_in_bytes();
-        let (value, compressed) = {
-            match self.options.compression{
-                Compression::Enabled =>{
-                    match &value {
-                        StorageValue::Text(txt) => {
-                            if entry_size > self.options.compression_threshold {
-                                let txt_bytes = match compress(txt) {
-                                    Ok(bytes) => bytes,
-                                    Err(e) => {
-                                        eprintln!("{e:?}");
-                                        return Ok(());
-                                    }
-                                };
-                                (StorageValue::Bytes(txt_bytes), true)
-                            } else {
-                                (value, false)
-                            }
-                        }
-                        _ => (value, false),
-                    }
-                },
-                Compression::Disabled=> (value, false),
-                }
-        };
-
-        let entry = StorageEntry {
-            value,
-            created_at: timestamp,
-            last_accessed: timestamp,
-            access_count: 0,
-            entry_size,
-            ttl: self.options.ttl,
-            compressed,
-        };
-        self.store.insert(key, entry);
-        self.remove_expired();
+        self.insert_with_ttl(key, value, self.options.ttl)?;
         Ok(())
     }
 
@@ -357,33 +316,39 @@ impl Storage {
         self.store.remove(key);
     }
 
-    pub fn insert_with_ttl(&mut self, key: String, value: StorageValue, ttl: Duration)-> Result<(), String> {
+    pub fn insert_with_ttl(
+        &mut self,
+        key: String,
+        value: StorageValue,
+        ttl: Duration,
+    ) -> Result<(), String> {
+        if self.is_full() {
+            self.evict_entries();
+        }
         let entry_size = value.size_in_bytes();
         let now = SystemTime::now();
 
         let (value, compressed) = {
-            match self.options.compression{
-                Compression::Enabled =>{
-                    match &value {
-                        StorageValue::Text(txt) => {
-                            if entry_size > self.options.compression_threshold {
-                                let txt_bytes = match compress(txt) {
-                                    Ok(bytes) => bytes,
-                                    Err(e) => {
-                                        eprintln!("{e:?}");
-                                        return Ok(());
-                                    }
-                                };
-                                (StorageValue::Bytes(txt_bytes), true)
-                            } else {
-                                (value, false)
-                            }
+            match self.options.compression {
+                Compression::Enabled => match &value {
+                    StorageValue::Text(txt) => {
+                        if entry_size > self.options.compression_threshold {
+                            let txt_bytes = match compress(txt) {
+                                Ok(bytes) => bytes,
+                                Err(e) => {
+                                    eprintln!("{e:?}");
+                                    return Err(format!("Compression error: {e}"));
+                                }
+                            };
+                            (StorageValue::Bytes(txt_bytes), true)
+                        } else {
+                            (value, false)
                         }
-                        _ => (value, false),
                     }
+                    _ => (value, false),
                 },
-                Compression::Disabled=> (value, false),
-                }
+                Compression::Disabled => (value, false),
+            }
         };
 
         let entry = StorageEntry {
@@ -562,8 +527,10 @@ impl Storage {
         let mut reader = BufReader::new(file);
         let mut buffer = Vec::new();
 
-        let read = reader.read(&mut buffer).context("read bytes into buffer")?;
-        if read == 0 {
+        reader
+            .read_to_end(&mut buffer)
+            .context("read bytes into buffer")?;
+        if buffer.is_empty() {
             return Ok(());
         }
 
@@ -574,14 +541,16 @@ impl Storage {
 
     pub fn save_to_disk(&self, path: &str) -> anyhow::Result<()> {
         let path = Path::new(path);
-        if !path.exists() {
-            File::create(path).context("create db file")?;
-        }
+        let file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)
+            .context("open db for writing")?;
 
-        let file = File::open(path).context("open db file")?;
         let mut writer = BufWriter::new(file);
-
         bincode2::serialize_into(&mut writer, &self).context("serialize into db")?;
+        writer.flush().context("flush writer")?;
         Ok(())
     }
 }
@@ -846,8 +815,10 @@ mod tests {
         let mut storage = Storage::default();
         let ttl = Duration::from_secs(5);
         let v1 = StorageValue::Text("custom val".to_string());
-        storage.insert_with_ttl("custom_key".to_string(), v1, ttl).unwrap();
-        
+        storage
+            .insert_with_ttl("custom_key".to_string(), v1, ttl)
+            .unwrap();
+
         let entry = storage.get_entry("custom_key").unwrap();
         assert_eq!(entry.value, StorageValue::Text("custom val".to_string()));
         assert_eq!(entry.ttl, ttl);
@@ -859,7 +830,9 @@ mod tests {
         let original_ttl = Duration::from_secs(5);
         let extension = 10;
         let v1 = StorageValue::Text("val".to_string());
-        storage.insert_with_ttl("key".to_string(), v1, original_ttl).unwrap();
+        storage
+            .insert_with_ttl("key".to_string(), v1, original_ttl)
+            .unwrap();
 
         let result = storage.extend_ttl("key", extension);
         assert!(result.is_ok());
@@ -876,7 +849,9 @@ mod tests {
         let original_ttl = Duration::from_secs(5);
         let extension = -10; // would overflow
         let v1 = StorageValue::Text("val".to_string());
-        storage.insert_with_ttl("key".to_string(), v1, original_ttl).unwrap();
+        storage
+            .insert_with_ttl("key".to_string(), v1, original_ttl)
+            .unwrap();
 
         let result = storage.extend_ttl("key", extension);
         assert!(result.is_err());

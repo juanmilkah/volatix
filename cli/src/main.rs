@@ -143,7 +143,7 @@ fn parse_list(chars: &[char], pointer: &mut usize) -> Result<Vec<String>, String
     let end_delimeter = match delimeter {
         '[' => ']',
         '{' => '}',
-        _ => unreachable!(),
+        _ => return Err("invalid end delimeter".to_string()),
     };
 
     let separator = ',';
@@ -584,7 +584,7 @@ fn serialize_request(command: &Command) -> Vec<u8> {
             arr.as_bytes().to_vec()
         }
 
-        _ => unreachable!(),
+        _ => Vec::new(),
     }
 }
 
@@ -698,13 +698,13 @@ fn deserialize_response(resp: &[u8]) -> Result<Response, String> {
                                                 deeper_vec.push(child);
                                             }
                                             RequestType::Null => inner_vec.push(Response::Null),
-                                            _ => unimplemented!(),
+                                            _ => return Err("Unimplemented!".to_string()),
                                         }
                                     }
                                     outer_vec.push(Response::Array { data: deeper_vec })
                                 }
 
-                                _ => unreachable!(),
+                                _ => return Err("Unreachable".to_string()),
                             }
                         }
                         if !inner_vec.is_empty() {
@@ -712,12 +712,12 @@ fn deserialize_response(resp: &[u8]) -> Result<Response, String> {
                         }
                     }
 
-                    _ => unreachable!(),
+                    _ => return Err("unreachable!".to_string()),
                 }
             }
             Ok(Response::Array { data: outer_vec })
         }
-        _ => unimplemented!("later"),
+        _ => Err("Unexpected response type".to_string()),
     }
 }
 
@@ -840,6 +840,10 @@ fn main() -> Result<(), String> {
             }
             _ => {
                 let req = serialize_request(&command);
+                if req.is_empty() {
+                    help();
+                    continue;
+                }
                 if stream.write_all(&req).is_err() {
                     eprintln!("Failed writing to tcp stream");
                     continue;

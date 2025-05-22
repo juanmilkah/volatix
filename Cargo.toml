@@ -10,22 +10,6 @@ license = "MIT"
 [workspace]
 members = ["server", "cli", "volatix-bench"]
 
-[workspace.dependencies]
-anyhow = "1.0.98"
-parking_lot = "0.12.3"
-rand = "0.9.1"
-serde = { version = "1.0.219", features = ["derive"] }
-bincode2 = "2.0.1"
-flate2 = "1.1.1"
-
-[dependencies]
-anyhow = {workspace = true}
-parking_lot = {workspace = true}
-rand = {workspace = true}
-serde = {workspace = true}
-bincode2 = {workspace = true}
-flate2 = {workspace = true}
-
 [[bin]]
 name = "server"
 path = "server/src/main.rs"
@@ -41,4 +25,22 @@ path = "server/src/lib.rs"
 [[bin]]
 name = "volatix-bench"
 path = "volatix-bench/src/main.rs"
+
+[workspace.dependencies]
+anyhow = "1.0.98"
+bincode2 = "2.0.1"
+ctrlc = "3.4.7"
+flate2 = "1.1.1"
+parking_lot = "0.12.3"
+rand = "0.9.1"
+serde = { version = "1.0.219", features = ["derive"] }
+
+[dependencies]
+anyhow = {workspace = true}
+bincode2 = {workspace = true}
+ctrlc = {workspace = true}
+flate2 = {workspace = true}
+parking_lot = {workspace = true}
+rand = {workspace = true}
+serde = {workspace = true}
 
