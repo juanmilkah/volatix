@@ -29,6 +29,8 @@ enum Command {
     GetTtl,
     Dump,
     SetMap,
+    Incr,
+    Decr,
 }
 
 fn get_value_type(value: &str) -> StorageValue {
@@ -171,6 +173,8 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
                         "GETLIST" => Command::GetList,
                         "SETLIST" => Command::SetList,
                         "SETMAP" => Command::SetMap,
+                        "INCR" => Command::Incr,
+                        "DECR" => Command::Decr,
                         _ => return null_response(),
                     }
                 }
@@ -251,7 +255,6 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
                         _ => bulk_error_response("Invalid request type for DELETE key"),
                     }
                 }
-
                 Command::Dump => {
                     if children.len() < 2 {
                         return bulk_error_response("Command missing some arguments");
@@ -271,7 +274,6 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
                         _ => bulk_error_response("Invalid request type for Dump key"),
                     }
                 }
-
                 Command::ConfGet => {
                     if children.len() < 2 {
                         return bulk_error_response("Command missing some arguments");
@@ -291,7 +293,6 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
                         _ => bulk_error_response("Invalid request type for CONFGET key"),
                     }
                 }
-
                 Command::ConfSet => {
                     if children.len() < 3 {
                         return bulk_error_response("Command missing some arguments");
@@ -319,7 +320,6 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
                         _ => bulk_error_response("Invalid request type for SET key"),
                     }
                 }
-
                 Command::GetTtl => {
                     if children.len() < 2 {
                         return bulk_error_response("Command missing some arguments");
@@ -338,7 +338,6 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
                         _ => bulk_error_response("Invalid request type for GETTTL key"),
                     }
                 }
-
                 Command::SetwTtl => {
                     if children.len() < 4 {
                         return bulk_error_response("Command missing some arguments");
@@ -385,7 +384,6 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
                         _ => bulk_error_response("Invalid request type for SETWTTL key"),
                     }
                 }
-
                 Command::Expire => {
                     if children.len() < 3 {
                         return bulk_error_response("Command missing some arguments");
@@ -420,7 +418,6 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
                         _ => bulk_error_response("Invalid request type for EXPIRE key"),
                     }
                 }
-
                 Command::DeleteList => {
                     let mut keys = Vec::new();
                     for child in children {
@@ -437,7 +434,6 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
 
                     bulk_string_response(Some("SUCCESS"))
                 }
-
                 Command::GetList => {
                     if children.is_empty() {
                         return null_response();
@@ -460,8 +456,6 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
                     // Response -> [[key, value|null], [key, value|null]]
                     batch_entries_response(&entries)
                 }
-
-                // [SETLIST  [key, value], [key, value]]
                 Command::SetList => {
                     if children.is_empty() {
                         return null_response();
@@ -508,7 +502,6 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
 
                     bulk_string_response(Some("SUCCESS"))
                 }
-
                 Command::SetMap => match &children[1] {
                     RequestType::Map { children } => {
                         let mut entries: HashMap<String, StorageValue> = HashMap::new();
@@ -557,6 +550,32 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
                     }
                     _ => bulk_error_response("Unsuported format for SETMAP"),
                 },
+
+                Command::Incr => {
+                    i += 1;
+                    match &children[i] {
+                        RequestType::BulkString { data } => {
+                            let key = String::from_utf8_lossy(data);
+                            storage.write().increment_entry(&key);
+
+                            bulk_string_response(Some("SUCCESS"))
+                        }
+                        _ => bulk_error_response("Invalid INCR key type"),
+                    }
+                }
+
+                Command::Decr => {
+                    i += 1;
+                    match &children[i] {
+                        RequestType::BulkString { data } => {
+                            let key = String::from_utf8_lossy(data);
+                            storage.write().decrement_entry(&key);
+
+                            bulk_string_response(Some("SUCCESS"))
+                        }
+                        _ => bulk_error_response("Invalid DECR key type"),
+                    }
+                }
             }
         }
         _ => null_response(),

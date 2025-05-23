@@ -70,6 +70,12 @@ enum Command {
 
     EvictNow,
     Flush,
+    Incr {
+        key: String,
+    },
+    Decr {
+        key: String,
+    },
 }
 
 fn parse_arg(chars: &[char], pointer: &mut usize, arg_name: &str) -> Result<String, String> {
@@ -373,6 +379,16 @@ fn parse_line(line: &str) -> Command {
 
         "FLUSH" => Command::Flush,
 
+        "INCR" => match parse_arg(&chars, &mut pointer, "key") {
+            Ok(key) => Command::Incr { key },
+            Err(e) => Command::ParseError(e),
+        },
+
+        "DECR" => match parse_arg(&chars, &mut pointer, "key") {
+            Ok(key) => Command::Decr { key },
+            Err(e) => Command::ParseError(e),
+        },
+
         _ => Command::ParseError(format!("Unknown command: {cmd_str}")),
     }
 }
@@ -595,6 +611,18 @@ fn serialize_request(command: &Command) -> Vec<u8> {
             arr.as_bytes().to_vec()
         }
 
+        Command::Incr { key } => {
+            let v = [bstring("INCR"), bstring(key)];
+            let v = array(&v);
+            v.as_bytes().to_vec()
+        }
+
+        Command::Decr { key } => {
+            let v = [bstring("DECR"), bstring(key)];
+            let v = array(&v);
+            v.as_bytes().to_vec()
+        }
+
         _ => Vec::new(),
     }
 }
@@ -776,6 +804,8 @@ fn help() {
     println!("    DELETE <key>                           # Delete a key");
     println!("    EXISTS <key>                           # Check if key exist");
     println!("    FLUSH                                  # Clear the database");
+    println!("    INCR <key>                             # Increment an Int value by 1");
+    println!("    DECR <key>                             # Decrement an Int value by 1");
     println!();
 
     println!("  Batch Operations:");

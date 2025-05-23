@@ -258,6 +258,7 @@ impl Storage {
 
     pub fn flush(&mut self) {
         self.store.clear();
+        self.reset_stats();
     }
 
     pub fn get_entry(&mut self, key: &str) -> Option<StorageEntry> {
@@ -317,8 +318,36 @@ impl Storage {
         Ok(())
     }
 
+    pub fn increment_entry(&mut self, key: &str) {
+        if let Some(entry) = self.store.get_mut(key) {
+            if let StorageValue::Int(n) = entry.value {
+                entry.value = StorageValue::Int(n + 1);
+                entry.last_accessed = SystemTime::now();
+                entry.access_count += 1;
+                self.stats.hits += 1;
+                return;
+            }
+        }
+        self.stats.misses += 1;
+    }
+
+    pub fn decrement_entry(&mut self, key: &str) {
+        if let Some(entry) = self.store.get_mut(key) {
+            if let StorageValue::Int(n) = entry.value {
+                entry.value = StorageValue::Int(n - 1);
+                entry.last_accessed = SystemTime::now();
+                entry.access_count += 1;
+                self.stats.hits += 1;
+                return;
+            }
+        }
+
+        self.stats.misses += 1;
+    }
+
     pub fn remove_entry(&mut self, key: &str) {
         self.store.remove(key);
+        self.stats.total_entries -= 1;
     }
 
     pub fn insert_with_ttl(
@@ -367,6 +396,7 @@ impl Storage {
         };
 
         self.store.insert(key, entry);
+        self.stats.total_entries += 1;
         self.remove_expired();
         Ok(())
     }
@@ -410,6 +440,7 @@ impl Storage {
         if let Some(key) = oldest_key {
             self.remove_entry(&key);
             self.stats.evictions += 1;
+            self.stats.total_entries -= 1;
         }
     }
 
@@ -424,6 +455,7 @@ impl Storage {
         let current_count = self.store.keys().count();
         let removed = prev_count - current_count;
         self.stats.expired_removals += removed;
+        self.stats.total_entries = self.store.keys().count();
     }
 
     pub fn evict_entries(&mut self) {
