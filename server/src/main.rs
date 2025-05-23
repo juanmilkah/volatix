@@ -31,6 +31,7 @@ enum Command {
     SetMap,
     Incr,
     Decr,
+    Rename,
 }
 
 fn get_value_type(value: &str) -> StorageValue {
@@ -175,6 +176,7 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
                         "SETMAP" => Command::SetMap,
                         "INCR" => Command::Incr,
                         "DECR" => Command::Decr,
+                        "RENAME" => Command::Rename,
                         _ => return null_response(),
                     }
                 }
@@ -574,6 +576,26 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
                             bulk_string_response(Some("SUCCESS"))
                         }
                         _ => bulk_error_response("Invalid DECR key type"),
+                    }
+                }
+
+                Command::Rename => {
+                    i += 1;
+                    match &children[i] {
+                        RequestType::BulkString { data } => {
+                            let old_key = String::from_utf8_lossy(data);
+                            i += 1;
+                            match &children[i] {
+                                RequestType::BulkString { data } => {
+                                    let new_key = String::from_utf8_lossy(data);
+
+                                    storage.write().rename_entry(&old_key, &new_key);
+                                    bulk_string_response(Some("SUCCESS"))
+                                }
+                                _ => bulk_error_response("Invalid RENAME new_key type"),
+                            }
+                        }
+                        _ => bulk_error_response("Invalid RENAME old_key type"),
                     }
                 }
             }

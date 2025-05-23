@@ -2,7 +2,7 @@
 
 ![Performance](performance.png)
 
-An In memory database. Still in development <skill issues :)>
+An In memory database :)
 
 ## Build the project
 
@@ -20,55 +20,6 @@ cargo build --release
 
 ```bash
   cargo run --release --bin cli
-```
-
-Run some commands
-
-```bash
-HELP
-SET key value
-GET key
-DELETE key
-
-SETLIST [key, value, key, value, ..]
-SETLIST {key, value, ..}
-SETMAP  {"key" : "value", "key": "value"}
-
-GETLIST {key, key, ..}
-GETLIST [key, key, ..]
-
-DELETELIST {key, key, ..}
-DELETELIST [key, key, ..]
-
-GETSTATS
-RESETSTATS
-ENTRYSTATS key
-
-CONFOPTIONS
-CONFSET key value
-CONFGET key
-
-SETWTTL key value ttl  # u64 ttl
-EXTENDTTL key value # i64 addition 
-GETTTL key
-
-FLUSH # Clear db
-EVICTNOW # Trigger eviction using current eviction policy
-```
-
-### Config Options
-```bash
-- MAXCAP      # U64
-- GLOBALTTL   # U64
-- COMPRESSION # Compress values past comp threshold
-  - ENABLE
-  - DISABLE  # default
-- COMPTHRESHOLD # U64, size of value in bytes
-- EVICTPOLICY #The storage layer eviction policy
-  - OLDEST    # Oldest first
-  - LFU       # Least Frequently Used
-  - LRU       # Least Recently Used
-  - SIZEAWARE # Largest first
 ```
 
 ## Benchmarking

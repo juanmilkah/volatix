@@ -346,8 +346,9 @@ impl Storage {
     }
 
     pub fn remove_entry(&mut self, key: &str) {
-        self.store.remove(key);
-        self.stats.total_entries -= 1;
+        if self.store.remove_entry(key).is_some() {
+            self.stats.total_entries -= 1;
+        }
     }
 
     pub fn insert_with_ttl(
@@ -511,6 +512,17 @@ impl Storage {
             self.store.remove_entry(&key);
             self.stats.evictions += 1;
         }
+    }
+
+    pub fn rename_entry(&mut self, old_key: &str, new_key: &str) {
+        if let Some((_, mut entry)) = self.store.remove_entry(old_key) {
+            entry.access_count += 1;
+            entry.last_accessed = SystemTime::now();
+            self.store.insert(new_key.to_string(), entry);
+            self.stats.hits += 1;
+            return;
+        }
+        self.stats.misses += 1;
     }
 
     pub fn get_stats(&self) -> StorageStats {

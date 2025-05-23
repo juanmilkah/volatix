@@ -76,6 +76,10 @@ enum Command {
     Decr {
         key: String,
     },
+    Rename {
+        old_key: String,
+        new_key: String,
+    },
 }
 
 fn parse_arg(chars: &[char], pointer: &mut usize, arg_name: &str) -> Result<String, String> {
@@ -389,6 +393,14 @@ fn parse_line(line: &str) -> Command {
             Err(e) => Command::ParseError(e),
         },
 
+        "RENAME" => match parse_arg(&chars, &mut pointer, "old_key") {
+            Ok(old_key) => match parse_arg(&chars, &mut pointer, "new_key") {
+                Ok(new_key) => Command::Rename { old_key, new_key },
+                Err(e) => Command::ParseError(e),
+            },
+            Err(e) => Command::ParseError(e),
+        },
+
         _ => Command::ParseError(format!("Unknown command: {cmd_str}")),
     }
 }
@@ -623,6 +635,12 @@ fn serialize_request(command: &Command) -> Vec<u8> {
             v.as_bytes().to_vec()
         }
 
+        Command::Rename { old_key, new_key } => {
+            let v = [bstring("RENAME"), bstring(old_key), bstring(new_key)];
+            let v = array(&v);
+            v.as_bytes().to_vec()
+        }
+
         _ => Vec::new(),
     }
 }
@@ -806,6 +824,7 @@ fn help() {
     println!("    FLUSH                                  # Clear the database");
     println!("    INCR <key>                             # Increment an Int value by 1");
     println!("    DECR <key>                             # Decrement an Int value by 1");
+    println!("    RENAME <old_key> <new_key>             # Rename key retaining the entry");
     println!();
 
     println!("  Batch Operations:");
