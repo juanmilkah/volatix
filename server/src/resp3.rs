@@ -3,6 +3,28 @@ use std::collections::{HashMap, HashSet};
 
 use crate::StorageEntry;
 
+pub fn array_response(data: &Vec<String>) -> Vec<u8> {
+    let mut arr = String::new();
+    let delimeter = "\r\n";
+
+    arr.push('*');
+    arr.push_str(&data.len().to_string());
+    arr.push_str(delimeter);
+
+    for entry in data {
+        let mut s = String::new();
+        s.push('$');
+        s.push_str(&entry.len().to_string());
+        s.push_str(delimeter);
+        s.push_str(entry);
+        s.push_str(delimeter);
+
+        arr.push_str(&s);
+    }
+
+    arr.as_bytes().to_vec()
+}
+
 pub fn bulk_string_response(data: Option<&str>) -> Vec<u8> {
     match data {
         Some(rsp) => {

@@ -80,6 +80,7 @@ enum Command {
         old_key: String,
         new_key: String,
     },
+    Keys,
 }
 
 fn parse_arg(chars: &[char], pointer: &mut usize, arg_name: &str) -> Result<String, String> {
@@ -401,6 +402,8 @@ fn parse_line(line: &str) -> Command {
             Err(e) => Command::ParseError(e),
         },
 
+        "KEYS" => Command::Keys,
+
         _ => Command::ParseError(format!("Unknown command: {cmd_str}")),
     }
 }
@@ -641,6 +644,8 @@ fn serialize_request(command: &Command) -> Vec<u8> {
             v.as_bytes().to_vec()
         }
 
+        Command::Keys => bstring("KEYS").as_bytes().to_vec(),
+
         _ => Vec::new(),
     }
 }
@@ -748,23 +753,6 @@ fn deserialize_response(resp: &[u8]) -> Result<Response, String> {
                                     };
                                     inner_vec.push(child);
                                 }
-                                RequestType::Array { children } => {
-                                    let mut deeper_vec = Vec::new();
-                                    for child in children {
-                                        match child {
-                                            RequestType::BulkString { data } => {
-                                                let child = Response::SimpleString {
-                                                    data: String::from_utf8_lossy(data).to_string(),
-                                                };
-                                                deeper_vec.push(child);
-                                            }
-                                            RequestType::Null => inner_vec.push(Response::Null),
-                                            _ => return Err("Unimplemented!".to_string()),
-                                        }
-                                    }
-                                    outer_vec.push(Response::Array { data: deeper_vec })
-                                }
-
                                 _ => return Err("Unreachable".to_string()),
                             }
                         }

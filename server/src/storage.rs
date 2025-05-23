@@ -289,6 +289,10 @@ impl Storage {
         self.get_entry(key).is_some()
     }
 
+    pub fn get_keys(&self) -> Vec<String> {
+        self.store.keys().cloned().collect()
+    }
+
     // batch operations
     pub fn get_entries(&mut self, keys: &[String]) -> Vec<(String, Option<StorageEntry>)> {
         let mut result = Vec::new();

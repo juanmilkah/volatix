@@ -10,7 +10,7 @@ use std::{
 
 use server_lib::{
     Compression, ConfigEntry, EvictionPolicy, RequestType, Storage, StorageOptions, StorageValue,
-    ThreadPool, batch_entries_response, boolean_response, bulk_error_response,
+    ThreadPool, array_response, batch_entries_response, boolean_response, bulk_error_response,
     bulk_string_response, integer_response, null_response, parse_request,
 };
 
@@ -145,6 +145,14 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
                     storage.write().evict_entries();
 
                     bulk_string_response(Some("SUCCESS"))
+                }
+
+                "KEYS" => {
+                    let keys = storage.read().get_keys();
+                    if keys.is_empty() {
+                        return null_response();
+                    }
+                    array_response(&keys)
                 }
                 _ => null_response(),
             }
