@@ -322,27 +322,27 @@ impl Storage {
     }
 
     pub fn increment_entry(&mut self, key: &str) {
-        if let Some(entry) = self.store.get_mut(key)
-            && let StorageValue::Int(n) = entry.value
-        {
-            entry.value = StorageValue::Int(n + 1);
-            entry.last_accessed = SystemTime::now();
-            entry.access_count += 1;
-            self.stats.hits += 1;
-            return;
+        if let Some(entry) = self.store.get_mut(key) {
+            if let StorageValue::Int(n) = entry.value {
+                entry.value = StorageValue::Int(n + 1);
+                entry.last_accessed = SystemTime::now();
+                entry.access_count += 1;
+                self.stats.hits += 1;
+                return;
+            }
         }
         self.stats.misses += 1;
     }
 
     pub fn decrement_entry(&mut self, key: &str) {
-        if let Some(entry) = self.store.get_mut(key)
-            && let StorageValue::Int(n) = entry.value
-        {
-            entry.value = StorageValue::Int(n - 1);
-            entry.last_accessed = SystemTime::now();
-            entry.access_count += 1;
-            self.stats.hits += 1;
-            return;
+        if let Some(entry) = self.store.get_mut(key) {
+            if let StorageValue::Int(n) = entry.value {
+                entry.value = StorageValue::Int(n - 1);
+                entry.last_accessed = SystemTime::now();
+                entry.access_count += 1;
+                self.stats.hits += 1;
+                return;
+            }
         }
 
         self.stats.misses += 1;
