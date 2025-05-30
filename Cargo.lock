@@ -306,6 +306,10 @@ dependencies = [
 [[package]]
 name = "volatix-bench"
 version = "0.1.0"
+dependencies = [
+ "parking_lot",
+ "rand",
+]
 
 [[package]]
 name = "wasi"

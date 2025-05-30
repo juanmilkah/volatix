@@ -152,11 +152,11 @@ impl StorageOptions {
 impl Default for StorageOptions {
     fn default() -> Self {
         Self {
-            ttl: Duration::from_secs(60 * 60 * 24), // 24 hrs
-            max_capacity: 1000,
+            ttl: Duration::from_secs(60 * 60 * 6), // 6 hrs
+            max_capacity: (1000 * 1000),           // 1 Million
             eviction_policy: EvictionPolicy::default(),
             compression: Compression::Disabled,
-            compression_threshold: 0,
+            compression_threshold: 1024 * 4, // 4Kb
         }
     }
 }
@@ -257,8 +257,7 @@ impl Storage {
     }
 
     pub fn flush(&mut self) {
-        self.store.clear();
-        self.reset_stats();
+        *self = Storage::new(StorageOptions::default());
     }
 
     pub fn get_entry(&mut self, key: &str) -> Option<StorageEntry> {
@@ -323,27 +322,27 @@ impl Storage {
     }
 
     pub fn increment_entry(&mut self, key: &str) {
-        if let Some(entry) = self.store.get_mut(key) {
-            if let StorageValue::Int(n) = entry.value {
-                entry.value = StorageValue::Int(n + 1);
-                entry.last_accessed = SystemTime::now();
-                entry.access_count += 1;
-                self.stats.hits += 1;
-                return;
-            }
+        if let Some(entry) = self.store.get_mut(key)
+            && let StorageValue::Int(n) = entry.value
+        {
+            entry.value = StorageValue::Int(n + 1);
+            entry.last_accessed = SystemTime::now();
+            entry.access_count += 1;
+            self.stats.hits += 1;
+            return;
         }
         self.stats.misses += 1;
     }
 
     pub fn decrement_entry(&mut self, key: &str) {
-        if let Some(entry) = self.store.get_mut(key) {
-            if let StorageValue::Int(n) = entry.value {
-                entry.value = StorageValue::Int(n - 1);
-                entry.last_accessed = SystemTime::now();
-                entry.access_count += 1;
-                self.stats.hits += 1;
-                return;
-            }
+        if let Some(entry) = self.store.get_mut(key)
+            && let StorageValue::Int(n) = entry.value
+        {
+            entry.value = StorageValue::Int(n - 1);
+            entry.last_accessed = SystemTime::now();
+            entry.access_count += 1;
+            self.stats.hits += 1;
+            return;
         }
 
         self.stats.misses += 1;
@@ -371,7 +370,7 @@ impl Storage {
             match self.options.compression {
                 Compression::Enabled => match &value {
                     StorageValue::Text(txt) => {
-                        if entry_size > self.options.compression_threshold {
+                        if entry_size >= self.options.compression_threshold {
                             let txt_bytes = match compress(txt) {
                                 Ok(bytes) => bytes,
                                 Err(e) => {
@@ -578,16 +577,8 @@ impl Storage {
 
         let file = File::open(path).context("open db")?;
         let mut reader = BufReader::new(file);
-        let mut buffer = Vec::new();
 
-        reader
-            .read_to_end(&mut buffer)
-            .context("read bytes into buffer")?;
-        if buffer.is_empty() {
-            return Ok(());
-        }
-
-        *self = bincode2::deserialize(&buffer).context("deserialize from buffer")?;
+        *self = bincode2::deserialize_from(&mut reader).context("deserialize from buffer")?;
 
         Ok(())
     }
@@ -621,8 +612,8 @@ mod tests {
     fn test_default_options() {
         let storage = Storage::default();
         assert_eq!(storage.store.len(), 0);
-        assert_eq!(storage.options.ttl, Duration::from_secs(60 * 60 * 24));
-        assert_eq!(storage.options.max_capacity, 1000);
+        assert_eq!(storage.options.ttl, Duration::from_secs(60 * 60 * 6));
+        assert_eq!(storage.options.max_capacity, 1000 * 1000);
     }
 
     // Test creating storage with custom options

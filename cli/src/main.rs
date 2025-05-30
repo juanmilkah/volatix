@@ -810,6 +810,7 @@ fn help() {
     println!("    DELETE <key>                           # Delete a key");
     println!("    EXISTS <key>                           # Check if key exist");
     println!("    FLUSH                                  # Clear the database");
+    println!("    KEYS                                   # Get a list of all key entries");
     println!("    INCR <key>                             # Increment an Int value by 1");
     println!("    DECR <key>                             # Decrement an Int value by 1");
     println!("    RENAME <old_key> <new_key>             # Rename key retaining the entry");
@@ -856,6 +857,21 @@ fn help() {
         "    EVICTNOW <key>                         # Trigger Eviction using current eviction policy"
     );
     println!();
+}
+
+fn format_response(resp: &Response) -> String {
+    match resp {
+        Response::SimpleString { data } => data.to_string(),
+        Response::SimpleError { data } => data.to_string(),
+        Response::BigNumber { data } => data.to_string(),
+        Response::Integer { data } => data.to_string(),
+        Response::Boolean { data } => data.to_string(),
+        Response::Null => "NULL".into(),
+        Response::Array { data } => {
+            let elements: Vec<String> = data.iter().map(format_response).collect();
+            format!("[{}]", elements.join(", "))
+        }
+    }
 }
 
 fn main() -> Result<(), String> {
@@ -946,11 +962,7 @@ fn main() -> Result<(), String> {
             Response::BigNumber { data } => println!("{data}"),
             Response::Null => println!("NULL"),
             Response::Boolean { data } => println!("{data}"),
-            Response::Array { data } => {
-                // do this the rookie way for now;;
-                // fix it if you can :)
-                println!("{data:?}");
-            }
+            Response::Array { data: _ } => println!("{}", format_response(&resp)),
         }
     }
 

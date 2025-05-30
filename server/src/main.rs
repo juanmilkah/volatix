@@ -613,7 +613,6 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
 }
 
 fn handle_client(mut stream: TcpStream, storage: Arc<parking_lot::RwLock<Storage>>) {
-    // 1MB
     let mut buffer = [0; 1024 * 1024];
 
     loop {

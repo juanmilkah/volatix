@@ -52,6 +52,7 @@ enum Command {
     Get { key: String },
     Set { key: String, value: String },
     Delete { key: String },
+    ConfSet { key: String, value: String },
 }
 
 fn serialize_request(command: &Command) -> Vec<u8> {
@@ -91,35 +92,88 @@ fn serialize_request(command: &Command) -> Vec<u8> {
 
             arr.0.as_bytes().to_vec()
         }
+        Command::ConfSet { key, value } => {
+            let mut arr = Vec::new();
+            let cmd = Bstring::new("CONFSET");
+            let key = Bstring::new(key);
+            let value = Bstring::new(value);
+
+            arr.push(cmd);
+            arr.push(key);
+            arr.push(value);
+            let arr = Array::new(&arr);
+
+            arr.0.as_bytes().to_vec()
+        }
     }
 }
 
-fn worker_thread(
-    id: usize,
+fn random_data() -> String {
+    let allowed = ('a'..='z').collect::<Vec<char>>();
+    let mut data = String::new();
+    let n = rand::random_range(..(1024 * 2) as usize); //0 - 2kb data size
+    for _ in 0..n {
+        data.push(allowed[rand::random_range(..allowed.len())]);
+    }
+
+    data.shrink_to_fit();
+    data
+}
+
+fn get_key() -> String {
+    let mut key = String::new();
+    let mut allowed = ('a'..='z').collect::<Vec<char>>();
+    let caps = ('A'..='Z').collect::<Vec<char>>();
+    allowed.extend(caps);
+
+    for _ in 0..5 {
+        key.push(allowed[rand::random_range(..allowed.len())]);
+    }
+
+    key
+}
+
+struct Config {
     duration: Duration,
     operation_count: Arc<AtomicUsize>,
     error_count: Arc<AtomicUsize>,
     read_latencies: Arc<parking_lot::Mutex<Vec<Duration>>>,
     write_latencies: Arc<parking_lot::Mutex<Vec<Duration>>>,
     mixed_ratio: f64,
-) {
-    let mut stream = match TcpStream::connect(ADDRESS) {
+    compress: bool,
+}
+
+fn worker_thread(id: usize, config: &Config) {
+    let tcp_stream = match TcpStream::connect(ADDRESS) {
         Ok(stream) => stream,
         Err(e) => {
             eprintln!("Thread {id} failed to connect: {e}");
             return;
         }
     };
+    let mut stream = tcp_stream;
+
+    // setup compression
+    if config.compress {
+        let req = serialize_request(&Command::ConfSet {
+            key: "COMPRESSION".to_string(),
+            value: "ENABLE".to_string(),
+        });
+        stream
+            .write_all(&req)
+            .map_err(|err| eprintln!("Failed to enable compression: {err}"))
+            .unwrap();
+    }
 
     let mut buffer = [0u8; 1024];
     let start_time = Instant::now();
 
     // pre generate some keys and values
     let key_count = 1000;
-    let keys: Vec<_> = (0..key_count).map(|i| format!("key{i}")).collect();
+    let keys: Vec<_> = (0..key_count).map(|_| get_key()).collect();
 
-    while start_time.elapsed() < duration {
-        let op_type = if rand::random::<f64>() < mixed_ratio {
+    while start_time.elapsed() < config.duration {
+        let op_type = if rand::random::<f64>() < config.mixed_ratio {
             // Get operation
             let key_idx = rand::random::<u64>() % key_count;
 
@@ -129,7 +183,7 @@ fn worker_thread(
         } else {
             // Set operation
             let key_idx = rand::random::<u64>() % key_count;
-            let value = format!("value-{key_idx}-{}", rand::random::<u64>());
+            let value = random_data();
             Command::Set {
                 key: keys[key_idx as usize].clone(),
                 value,
@@ -143,7 +197,9 @@ fn worker_thread(
         match stream.write_all(&req) {
             Ok(_) => {}
             Err(_) => {
-                error_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                config
+                    .error_count
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 continue;
             }
         }
@@ -157,20 +213,24 @@ fn worker_thread(
 
                 match op_type {
                     Command::Get { .. } => {
-                        let mut latencies = read_latencies.lock();
+                        let mut latencies = config.read_latencies.lock();
                         latencies.push(latency);
                     }
                     Command::Set { .. } => {
-                        let mut latencies = write_latencies.lock();
+                        let mut latencies = config.write_latencies.lock();
                         latencies.push(latency);
                     }
                     _ => {}
                 }
 
-                operation_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                config
+                    .operation_count
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
             Err(_) => {
-                error_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                config
+                    .error_count
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
         }
     }
@@ -182,6 +242,7 @@ fn main() {
     let mut thread_count = 4;
     let mut duration_secs = 60;
     let mut mixed_ratio = 0.7; // 70% read, 30% writes
+    let mut compress = false;
 
     for i in 1..args.len() {
         if args[i] == "--theads" && i + 1 < args.len() {
@@ -194,6 +255,9 @@ fn main() {
 
         if args[i] == "--ratio" && i + 1 < args.len() {
             mixed_ratio = args[i + 1].parse().unwrap_or(0.7);
+        }
+        if args[i] == "--compress" {
+            compress = true;
         }
     }
 
@@ -223,18 +287,17 @@ fn main() {
         let err_count = Arc::clone(&error_count);
         let read_lats = Arc::clone(&read_latencies);
         let write_lats = Arc::clone(&write_latencies);
+        let config = Config {
+            duration,
+            operation_count: op_count,
+            error_count: err_count,
+            read_latencies: read_lats,
+            write_latencies: write_lats,
+            mixed_ratio,
+            compress,
+        };
 
-        let handle = thread::spawn(move || {
-            worker_thread(
-                i,
-                duration,
-                op_count,
-                err_count,
-                read_lats,
-                write_lats,
-                mixed_ratio,
-            )
-        });
+        let handle = thread::spawn(move || worker_thread(i, &config));
         handles.push(handle);
     }
 
@@ -268,6 +331,19 @@ fn main() {
 
     // Calculate statistics
     println!("\n=== PERFORMANCE TEST RESULTS ===");
+    println!("Control Params");
+    println!("  - {thread_count} threads");
+    println!("  - {duration_secs} seconds duration");
+    println!(
+        "  - Compression {}",
+        if compress { "Enabled" } else { "Disabled" }
+    );
+    println!(
+        "  - {}% reads / {}% writes",
+        (mixed_ratio * 100.0) as u32,
+        ((1.0 - mixed_ratio) * 100.0) as u32
+    );
+    println!();
     println!("Total operations: {total_ops}");
     println!("Total errors: {total_errors}");
     println!("Total time: {:.2} seconds", total_time.as_secs_f64());
@@ -283,15 +359,8 @@ fn main() {
             read_lats.iter().sum::<Duration>().as_micros() as f64 / read_lats.len() as f64;
         let mut sorted_reads = read_lats.clone();
         sorted_reads.sort();
-        let read_p50 = sorted_reads[sorted_reads.len() * 50 / 100].as_micros();
-        let read_p95 = sorted_reads[sorted_reads.len() * 95 / 100].as_micros();
-        let read_p99 = sorted_reads[sorted_reads.len() * 99 / 100].as_micros();
-
         println!("\nREAD Latency:");
         println!("  Average: {read_avg:.2} µs");
-        println!("  p50: {read_p50} µs");
-        println!("  p95: {read_p95} µs");
-        println!("  p99: {read_p99} µs");
     }
 
     // Calculate write latency statistics
@@ -301,14 +370,7 @@ fn main() {
             write_lats.iter().sum::<Duration>().as_micros() as f64 / write_lats.len() as f64;
         let mut sorted_writes = write_lats.clone();
         sorted_writes.sort();
-        let write_p50 = sorted_writes[sorted_writes.len() * 50 / 100].as_micros();
-        let write_p95 = sorted_writes[sorted_writes.len() * 95 / 100].as_micros();
-        let write_p99 = sorted_writes[sorted_writes.len() * 99 / 100].as_micros();
-
         println!("\nWRITE Latency:");
         println!("  Average: {write_avg:.2} µs");
-        println!("  p50: {write_p50} µs");
-        println!("  p95: {write_p95} µs");
-        println!("  p99: {write_p99} µs");
     }
 }
