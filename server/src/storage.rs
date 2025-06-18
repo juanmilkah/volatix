@@ -4,6 +4,7 @@ use std::{
     fs::{File, OpenOptions},
     io::{self, BufReader, BufWriter, Read, Write},
     path::Path,
+    sync::atomic::{AtomicUsize, Ordering},
     time::{Duration, SystemTime},
 };
 
@@ -177,11 +178,11 @@ impl Display for StorageOptions {
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct StorageStats {
-    pub total_entries: usize,
-    pub hits: usize,
-    pub misses: usize,
-    pub evictions: usize,
-    pub expired_removals: usize,
+    pub total_entries: AtomicUsize,
+    pub hits: AtomicUsize,
+    pub misses: AtomicUsize,
+    pub evictions: AtomicUsize,
+    pub expired_removals: AtomicUsize,
 }
 
 impl Display for StorageStats {
@@ -189,7 +190,11 @@ impl Display for StorageStats {
         write!(
             f,
             "Total Entries: {}, Hits: {}, Misses: {}, Evictions: {}, Expired Removals: {}",
-            self.total_entries, self.hits, self.misses, self.evictions, self.expired_removals
+            self.total_entries.load(Ordering::Relaxed),
+            self.hits.load(Ordering::Relaxed),
+            self.misses.load(Ordering::Relaxed),
+            self.evictions.load(Ordering::Relaxed),
+            self.expired_removals.load(Ordering::Relaxed),
         )
     }
 }
@@ -263,7 +268,7 @@ impl Storage {
     pub fn get_entry(&mut self, key: &str) -> Option<StorageEntry> {
         if let Some(entry) = self.store.get_mut(key) {
             if !entry.is_expired() {
-                self.stats.hits += 1;
+                self.stats.hits.fetch_add(1, Ordering::Relaxed);
                 entry.access_count += 1;
                 entry.last_accessed = SystemTime::now();
                 if entry.compressed {
@@ -280,7 +285,7 @@ impl Storage {
             }
             self.remove_expired();
         }
-        self.stats.misses += 1;
+        self.stats.misses.fetch_add(1, Ordering::Relaxed);
         None
     }
 
@@ -327,11 +332,11 @@ impl Storage {
                 entry.value = StorageValue::Int(n + 1);
                 entry.last_accessed = SystemTime::now();
                 entry.access_count += 1;
-                self.stats.hits += 1;
+                self.stats.hits.fetch_add(1, Ordering::Relaxed);
                 return;
             }
         }
-        self.stats.misses += 1;
+        self.stats.misses.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn decrement_entry(&mut self, key: &str) {
@@ -340,17 +345,17 @@ impl Storage {
                 entry.value = StorageValue::Int(n - 1);
                 entry.last_accessed = SystemTime::now();
                 entry.access_count += 1;
-                self.stats.hits += 1;
+                self.stats.hits.fetch_add(1, Ordering::Relaxed);
                 return;
             }
         }
 
-        self.stats.misses += 1;
+        self.stats.misses.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn remove_entry(&mut self, key: &str) {
         if self.store.remove_entry(key).is_some() {
-            self.stats.total_entries -= 1;
+            self.stats.total_entries.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -400,7 +405,7 @@ impl Storage {
         };
 
         self.store.insert(key, entry);
-        self.stats.total_entries += 1;
+        self.stats.total_entries.fetch_add(1, Ordering::Relaxed);
         self.remove_expired();
         Ok(())
     }
@@ -443,8 +448,8 @@ impl Storage {
 
         if let Some(key) = oldest_key {
             self.remove_entry(&key);
-            self.stats.evictions += 1;
-            self.stats.total_entries -= 1;
+            self.stats.evictions.fetch_add(1, Ordering::Relaxed);
+            self.stats.total_entries.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -458,8 +463,12 @@ impl Storage {
         });
         let current_count = self.store.keys().count();
         let removed = prev_count - current_count;
-        self.stats.expired_removals += removed;
-        self.stats.total_entries = self.store.keys().count();
+        self.stats
+            .expired_removals
+            .fetch_add(removed, Ordering::Release);
+        self.stats
+            .total_entries
+            .store(self.store.keys().count(), Ordering::Release);
     }
 
     pub fn evict_entries(&mut self) {
@@ -486,7 +495,7 @@ impl Storage {
 
         if let Some(key) = key {
             self.store.remove_entry(&key);
-            self.stats.evictions += 1;
+            self.stats.evictions.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -500,7 +509,7 @@ impl Storage {
 
         if let Some(key) = key {
             self.store.remove_entry(&key);
-            self.stats.evictions += 1;
+            self.stats.evictions.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -513,7 +522,7 @@ impl Storage {
 
         if let Some(key) = key {
             self.store.remove_entry(&key);
-            self.stats.evictions += 1;
+            self.stats.evictions.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -522,19 +531,19 @@ impl Storage {
             entry.access_count += 1;
             entry.last_accessed = SystemTime::now();
             self.store.insert(new_key.to_string(), entry);
-            self.stats.hits += 1;
+            self.stats.hits.fetch_add(1, Ordering::Relaxed);
             return;
         }
-        self.stats.misses += 1;
+        self.stats.misses.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn get_stats(&self) -> StorageStats {
         StorageStats {
-            total_entries: self.stats.total_entries,
-            hits: self.stats.hits,
-            misses: self.stats.misses,
-            evictions: self.stats.evictions,
-            expired_removals: self.stats.expired_removals,
+            total_entries: self.stats.total_entries.load(Ordering::Relaxed).into(),
+            hits: self.stats.hits.load(Ordering::Relaxed).into(),
+            misses: self.stats.misses.load(Ordering::Relaxed).into(),
+            evictions: self.stats.evictions.load(Ordering::Relaxed).into(),
+            expired_removals: self.stats.expired_removals.load(Ordering::Relaxed).into(),
         }
     }
 
@@ -601,7 +610,7 @@ impl Storage {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, thread, time::Duration};
+    use std::{collections::HashMap, sync::atomic::Ordering, thread, time::Duration};
 
     use crate::{Compression, ConfigEntry, EvictionPolicy, StorageValue};
 
@@ -1033,14 +1042,14 @@ mod tests {
         storage.get_entry("missing");
 
         let stats = storage.get_stats();
-        assert_eq!(stats.hits, 1);
-        assert_eq!(stats.misses, 1);
+        assert_eq!(stats.hits.load(Ordering::Relaxed), 1);
+        assert_eq!(stats.misses.load(Ordering::Relaxed), 1);
 
         storage.reset_stats();
         let stats = storage.get_stats();
-        assert_eq!(stats.hits, 0);
-        assert_eq!(stats.misses, 0);
-        assert_eq!(stats.evictions, 0);
-        assert_eq!(stats.expired_removals, 0);
+        assert_eq!(stats.hits.load(Ordering::Relaxed), 0);
+        assert_eq!(stats.misses.load(Ordering::Relaxed), 0);
+        assert_eq!(stats.evictions.load(Ordering::Relaxed), 0);
+        assert_eq!(stats.expired_removals.load(Ordering::Relaxed), 0);
     }
 }
