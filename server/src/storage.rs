@@ -283,7 +283,6 @@ impl Storage {
 
                 return Some(entry.clone());
             }
-            self.remove_expired();
         }
         self.stats.misses.fetch_add(1, Ordering::Relaxed);
         None
@@ -406,7 +405,6 @@ impl Storage {
 
         self.store.insert(key, entry);
         self.stats.total_entries.fetch_add(1, Ordering::Relaxed);
-        self.remove_expired();
         Ok(())
     }
 
@@ -473,7 +471,8 @@ impl Storage {
 
     pub fn evict_entries(&mut self) {
         self.remove_expired();
-        if self.store.len() < self.options.max_capacity as usize {
+        // TODO! Not sure whether we should return here
+        if !self.is_full() {
             return;
         }
 
@@ -741,37 +740,6 @@ mod tests {
         // Verify expired key is gone
         assert!(storage.get_entry("key1").is_none());
         assert!(storage.get_entry("key2").is_some());
-    }
-
-    // Test that remove_expired correctly handles multiple expired keys
-    #[test]
-    fn test_multiple_expired_keys() {
-        let options = StorageOptions::new(
-            Duration::from_millis(100),
-            10,
-            &EvictionPolicy::Oldest,
-            &crate::Compression::Disabled,
-            0,
-        );
-        let mut storage = Storage::new(options);
-        let v1 = StorageValue::Text("value1".to_string());
-        let v2 = StorageValue::Text("value2".to_string());
-        let v3 = StorageValue::Text("value3".to_string());
-
-        storage.insert_entry("key1".to_string(), v1).unwrap();
-        storage.insert_entry("key2".to_string(), v2).unwrap();
-
-        // Wait for TTL to expire
-        thread::sleep(Duration::from_millis(150));
-
-        // Insert a new key to trigger remove_expired()
-        storage.insert_entry("key3".to_string(), v3).unwrap();
-
-        // Verify both expired keys are gone
-        assert!(storage.get_entry("key1").is_none());
-        assert!(storage.get_entry("key2").is_none());
-        assert!(storage.get_entry("key3").is_some());
-        assert_eq!(storage.store.len(), 1);
     }
 
     // Test the existing remove_expired function directly

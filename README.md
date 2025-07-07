@@ -1,6 +1,7 @@
 # Volatix
 
 ![Performance](performance.png)
+![Memory Info](flamegraph.svg)
 
 An In memory database :)
 

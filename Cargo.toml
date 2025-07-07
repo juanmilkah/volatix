@@ -44,3 +44,5 @@ parking_lot = {workspace = true}
 rand = {workspace = true}
 serde = {workspace = true}
 
+[profile.release]
+debug = true
