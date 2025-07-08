@@ -28,10 +28,12 @@ pub fn array_response(data: &Vec<String>) -> Vec<u8> {
 pub fn bulk_string_response(data: Option<&str>) -> Vec<u8> {
     match data {
         Some(rsp) => {
-            let mut s = String::new();
-            s.push('$');
             let len = rsp.len();
-            s.push_str(&len.to_string());
+            let str_len = rsp.to_string();
+            //pre alloc to avoid constant allocs
+            let mut s = String::with_capacity(1+str_len.len()+2+len+2);
+            s.push('$');
+            s.push_str(&str_len);
             s.push_str("\r\n");
             s.push_str(rsp);
             s.push_str("\r\n");
@@ -296,7 +298,7 @@ fn parse_bulk_strings(data: &[u8]) -> Result<(RequestType, usize), String> {
         Err(e) => return Err(e.to_string()),
     };
 
-    let length = match i64::from_str_radix(str_length, 10) {
+    let length = match str_length.parse::<i64>() {
         Ok(len) => len,
         Err(_) => return Err("i64 from ascii".to_string()), // Error in parsing length
     };
@@ -337,13 +339,13 @@ fn parse_bulk_strings(data: &[u8]) -> Result<(RequestType, usize), String> {
 // An additional RESP type for every element of the array.
 fn parse_arrays(data: &[u8]) -> Result<(RequestType, usize), String> {
     let mut i = 0;
-    let mut length = Vec::new();
+    let mut length = Vec::with_capacity(25); // at most i64 in string format can only have 20 chars 
     while i < data.len() && data[i] != b'\r' {
         length.push(data[i]);
         i += 1;
     }
 
-    let str_length = match String::from_utf8(length.to_vec()) {
+    let str_length = match str::from_utf8(&length) {
         Ok(s) => s,
         Err(e) => return Err(e.to_string()),
     };
