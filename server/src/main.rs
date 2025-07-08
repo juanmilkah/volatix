@@ -4,9 +4,11 @@ use std::{
     io::{Read, Write},
     net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream},
     sync::{Arc, atomic::AtomicBool},
+    thread,
     time::Duration,
 };
 
+use anyhow::Context;
 use server_lib::{
     Compression, ConfigEntry, EvictionPolicy, RequestType, Storage, StorageOptions, StorageValue,
     ThreadPool, array_response, batch_entries_response, boolean_response, bulk_error_response,
@@ -655,6 +657,9 @@ fn main() -> anyhow::Result<()> {
 
     let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port));
     let listener = TcpListener::bind(addr)?;
+    listener
+        .set_nonblocking(true)
+        .context("Make listener non blocking")?;
     println!("Server listening on {addr}");
 
     let options = StorageOptions::default();
@@ -673,14 +678,15 @@ fn main() -> anyhow::Result<()> {
     .expect("setting up SIGINT handler");
 
     while r.load(std::sync::atomic::Ordering::Relaxed) {
-        for stream in listener.incoming() {
-            match stream {
-                Ok(stream) => {
-                    let storage = Arc::clone(&storage);
-                    pool.execute(|| handle_client(stream, storage));
-                }
-                Err(e) => eprintln!("ERROR: {e}"),
+        match listener.accept() {
+            Ok((stream, _)) => {
+                let storage = Arc::clone(&storage);
+                pool.execute(|| handle_client(stream, storage));
             }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(e) => eprintln!("ERROR: {e}"),
         }
     }
 
