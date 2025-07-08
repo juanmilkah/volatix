@@ -113,11 +113,11 @@ pub struct StorageOptions {
     pub ttl: Duration,
     pub max_capacity: u64,
     pub eviction_policy: EvictionPolicy,
-    pub compression: Compression,
+    pub compression: bool,
     pub compression_threshold: usize,
 }
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+#[derive(Debug)]
 pub enum Compression {
     Enabled,
     Disabled,
@@ -132,6 +132,16 @@ impl Display for Compression {
     }
 }
 
+impl From<bool> for Compression {
+    fn from(value: bool) -> Self {
+        if value {
+            Compression::Enabled
+        } else {
+            Compression::Disabled
+        }
+    }
+}
+
 impl StorageOptions {
     pub fn new(
         ttl: Duration,
@@ -140,11 +150,15 @@ impl StorageOptions {
         compression: &Compression,
         compression_threshold: usize,
     ) -> Self {
+        let compression = match compression {
+            Compression::Enabled => true,
+            Compression::Disabled => false,
+        };
         Self {
             ttl,
             max_capacity: max_cap,
             eviction_policy: *evict_policy,
-            compression: *compression,
+            compression,
             compression_threshold,
         }
     }
@@ -156,7 +170,7 @@ impl Default for StorageOptions {
             ttl: Duration::from_secs(60 * 60 * 6), // 6 hrs
             max_capacity: (1000 * 1000),           // 1 Million
             eviction_policy: EvictionPolicy::default(),
-            compression: Compression::Disabled,
+            compression: false,
             compression_threshold: 1024 * 4, // 4Kb
         }
     }
@@ -371,25 +385,14 @@ impl Storage {
         let now = SystemTime::now();
 
         let (value, compressed) = {
-            match self.options.compression {
-                Compression::Enabled => match &value {
-                    StorageValue::Text(txt) => {
-                        if entry_size >= self.options.compression_threshold {
-                            let txt_bytes = match compress(txt) {
-                                Ok(bytes) => bytes,
-                                Err(e) => {
-                                    eprintln!("{e:?}");
-                                    return Err(format!("Compression error: {e}"));
-                                }
-                            };
-                            (StorageValue::Bytes(txt_bytes), true)
-                        } else {
-                            (value, false)
-                        }
-                    }
-                    _ => (value, false),
-                },
-                Compression::Disabled => (value, false),
+            if self.options.compression
+                && let StorageValue::Text(text) = &value
+                && entry_size >= self.options.compression_threshold
+            {
+                let bytes = compress(text).map_err(|err| format!("Compression error: {err}"))?;
+                (StorageValue::Bytes(bytes), true)
+            } else {
+                (value, false)
             }
         };
 
@@ -555,7 +558,7 @@ impl Storage {
             "EVICTPOLICY" => Some(ConfigEntry::EvictPolicy(self.options.eviction_policy)),
             "MAXCAP" => Some(ConfigEntry::MaxCapacity(self.options.max_capacity)),
             "GLOBALTTL" => Some(ConfigEntry::GlobalTtl(self.options.ttl.as_secs())),
-            "COMPRESSION" => Some(ConfigEntry::Compression(self.options.compression)),
+            "COMPRESSION" => Some(ConfigEntry::Compression(self.options.compression.into())),
             "COMPRESSIONTHRESHOLD" => Some(ConfigEntry::CompressionThreshold(
                 self.options.compression_threshold,
             )),
@@ -568,7 +571,12 @@ impl Storage {
             ConfigEntry::EvictPolicy(p) => self.options.eviction_policy = *p,
             ConfigEntry::GlobalTtl(t) => self.options.ttl = Duration::from_secs(*t),
             ConfigEntry::MaxCapacity(c) => self.options.max_capacity = *c,
-            ConfigEntry::Compression(b) => self.options.compression = *b,
+            ConfigEntry::Compression(b) => {
+                self.options.compression = match b {
+                    Compression::Enabled => true,
+                    Compression::Disabled => false,
+                }
+            }
             ConfigEntry::CompressionThreshold(s) => self.options.compression_threshold = *s,
         }
     }
