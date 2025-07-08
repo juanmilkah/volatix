@@ -269,7 +269,8 @@ fn compress(data: &str) -> Result<Vec<u8>, String> {
 impl Storage {
     pub fn new(options: StorageOptions) -> Self {
         Storage {
-            store: HashMap::new(),
+            // Not really sure whether this is a bad idea or not;
+            store: HashMap::with_capacity(1000),
             options,
             stats: StorageStats::default(),
         }
