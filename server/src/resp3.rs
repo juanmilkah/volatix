@@ -252,7 +252,7 @@ fn parse_integers(data: &[u8]) -> Result<(RequestType, usize), String> {
         _ => None,
     };
 
-    let mut num_bytes = Vec::new();
+    let mut num_bytes = Vec::with_capacity(1024);
     while i < data.len() && data[i] != b'\r' {
         num_bytes.push(data[i]);
         i += 1;
@@ -812,31 +812,29 @@ fn parse_sets(data: &[u8]) -> Result<(RequestType, usize), String> {
 }
 
 pub fn parse_request(data: &[u8]) -> Result<RequestType, String> {
-    let mut i = 0;
     if data.is_empty() {
         return Ok(RequestType::Null);
     }
 
-    let data_type = match get_data_type(data[i]) {
+    let data_type = match get_data_type(data[0]) {
         DataType::Unknown => return Err("unknown type".to_string()),
         t => t,
     };
-    i += 1;
 
     let (content, _) = match data_type {
-        DataType::Integer => parse_integers(&data[i..])?,
-        DataType::BulkString => parse_bulk_strings(&data[i..])?,
-        DataType::SimpleString => parse_simple_strings(&data[i..])?,
-        DataType::SimpleError => parse_simple_errors(&data[i..])?,
-        DataType::Array => parse_arrays(&data[i..])?,
-        DataType::Null => parse_null(&data[i..])?,
-        DataType::Boolean => parse_booleans(&data[i..])?,
-        DataType::Double => parse_doubles(&data[i..])?,
-        DataType::BigNumber => parse_big_numbers(&data[i..])?,
-        DataType::BulkError => parse_bulk_errors(&data[i..])?,
-        DataType::VerbatimString => parse_verbatim_strings(&data[i..])?,
-        DataType::Maps => parse_maps(&data[i..])?,
-        DataType::Sets => parse_sets(&data[i..])?,
+        DataType::Integer => parse_integers(&data[1..])?,
+        DataType::BulkString => parse_bulk_strings(&data[1..])?,
+        DataType::SimpleString => parse_simple_strings(&data[1..])?,
+        DataType::SimpleError => parse_simple_errors(&data[1..])?,
+        DataType::Array => parse_arrays(&data[1..])?,
+        DataType::Null => parse_null(&data[1..])?,
+        DataType::Boolean => parse_booleans(&data[1..])?,
+        DataType::Double => parse_doubles(&data[1..])?,
+        DataType::BigNumber => parse_big_numbers(&data[1..])?,
+        DataType::BulkError => parse_bulk_errors(&data[1..])?,
+        DataType::VerbatimString => parse_verbatim_strings(&data[1..])?,
+        DataType::Maps => parse_maps(&data[1..])?,
+        DataType::Sets => parse_sets(&data[1..])?,
         DataType::Unknown => return Err("Unknown data type!".to_string()),
     };
 
