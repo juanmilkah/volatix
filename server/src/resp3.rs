@@ -29,7 +29,7 @@ pub fn bulk_string_response(data: Option<&str>) -> Vec<u8> {
     match data {
         Some(rsp) => {
             let len = rsp.len();
-            let str_len = rsp.to_string();
+            let str_len = len.to_string();
             //pre alloc to avoid constant allocs
             let mut s = String::with_capacity(1 + str_len.len() + 2 + len + 2);
             s.push('$');
@@ -37,7 +37,6 @@ pub fn bulk_string_response(data: Option<&str>) -> Vec<u8> {
             s.push_str("\r\n");
             s.push_str(rsp);
             s.push_str("\r\n");
-
             s.as_bytes().to_vec()
         }
         None => null_response(),
