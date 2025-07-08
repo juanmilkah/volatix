@@ -641,14 +641,19 @@ fn handle_client(mut stream: TcpStream, storage: Arc<parking_lot::RwLock<Storage
 fn main() -> anyhow::Result<()> {
     let args: Vec<_> = args().collect();
     let mut thread_count = 5;
+    let mut port: u16 = 7878;
 
     for i in 1..args.len() {
         if args[i] == "--threads" && i + 1 < args.len() {
             thread_count = args[i + 1].parse().unwrap_or(4);
         }
+
+        if args[i] == "--port" && i + 1 < args.len() {
+            port = args[i + 1].parse().unwrap_or(7878);
+        }
     }
 
-    let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 7878));
+    let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port));
     let listener = TcpListener::bind(addr)?;
     println!("Server listening on {addr}");
 
