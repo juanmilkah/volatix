@@ -31,7 +31,7 @@ pub fn bulk_string_response(data: Option<&str>) -> Vec<u8> {
             let len = rsp.len();
             let str_len = rsp.to_string();
             //pre alloc to avoid constant allocs
-            let mut s = String::with_capacity(1+str_len.len()+2+len+2);
+            let mut s = String::with_capacity(1 + str_len.len() + 2 + len + 2);
             s.push('$');
             s.push_str(&str_len);
             s.push_str("\r\n");
@@ -291,7 +291,6 @@ fn parse_bulk_strings(data: &[u8]) -> Result<(RequestType, usize), String> {
     if i >= data.len() || i + 1 >= data.len() || data[i] != b'\r' || data[i + 1] != b'\n' {
         return Err("No proper termination".to_string());
     }
-
 
     let str_length = match str::from_utf8(&length) {
         Ok(s) => s,
