@@ -53,6 +53,7 @@ enum Command {
     Set { key: String, value: String },
     Delete { key: String },
     ConfSet { key: String, value: String },
+    Flush,
 }
 
 fn serialize_request(command: &Command) -> Vec<u8> {
@@ -104,6 +105,11 @@ fn serialize_request(command: &Command) -> Vec<u8> {
             let arr = Array::new(&arr);
 
             arr.0.as_bytes().to_vec()
+        }
+
+        Command::Flush => {
+            let cmd = Bstring::new("FLUSH");
+            cmd.0.as_bytes().to_vec()
         }
     }
 }
@@ -372,5 +378,12 @@ fn main() {
         sorted_writes.sort();
         println!("\nWRITE Latency:");
         println!("  Average: {write_avg:.2} µs");
+    }
+
+    // cleanup
+    let cmd = serialize_request(&Command::Flush);
+    let mut tcp_stream = TcpStream::connect(ADDRESS).unwrap();
+    if tcp_stream.write_all(&cmd).is_err() {
+        eprintln!("Cleanup failed!");
     }
 }

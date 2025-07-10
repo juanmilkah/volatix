@@ -68,14 +68,13 @@ pub fn boolean_response(b: bool) -> Vec<u8> {
     }
 }
 
-// :[<+|->]<value>\r\n
+// :[<+|- >]<value>\r\n
 pub fn integer_response(i: i64) -> Vec<u8> {
     format!(":{i}\r\n").as_bytes().to_vec()
 }
 
 // *<number-of-elements>\r\n<element-1>...<element-n>
-// This failed -> [[key, value|null], [key, value|null]]
-// This currently works -> [value|null, value|null]
+//  [[key, value|null], [key, value|null]]
 pub fn batch_entries_response(data: &[(String, Option<StorageEntry>)]) -> Vec<u8> {
     if data.is_empty() {
         return null_response();

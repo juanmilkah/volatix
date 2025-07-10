@@ -71,11 +71,13 @@ impl ThreadPool {
 impl Drop for ThreadPool {
     fn drop(&mut self) {
         // drop sender first
+        println!("Starting server cleanup ...");
         drop(self.sender.take());
         for worker in &mut self.workers {
             if let Some(thread) = worker.thread.take() {
                 thread.join().unwrap();
             }
         }
+        println!("Server shutdown complete.");
     }
 }

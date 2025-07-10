@@ -10,9 +10,9 @@ use std::{
 
 use anyhow::Context;
 use server_lib::{
-    Compression, ConfigEntry, EvictionPolicy, RequestType, Storage, StorageOptions, StorageValue,
-    ThreadPool, array_response, batch_entries_response, boolean_response, bulk_error_response,
-    bulk_string_response, integer_response, null_response, parse_request,
+    Compression, ConfigEntry, EvictionPolicy, LockedStorage, RequestType, StorageOptions,
+    StorageValue, ThreadPool, array_response, batch_entries_response, boolean_response,
+    bulk_error_response, bulk_string_response, integer_response, null_response, parse_request,
 };
 
 enum Command {
@@ -112,7 +112,7 @@ fn config_entry(key: &str, value: &StorageValue) -> Result<ConfigEntry, String> 
 //    [DELETELIST [key, key, key]]
 // For maps and json  -> An Array of RequestTypes::Bulkstring && RequestType::Maps
 //    [SETMAP  {key, value, key, value}]
-fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>) -> Vec<u8> {
+fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<LockedStorage>>) -> Vec<u8> {
     match req {
         RequestType::BulkString { data } => {
             let cmd = String::from_utf8_lossy(data).to_string();
@@ -613,7 +613,7 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<Storage>>
     }
 }
 
-fn handle_client(mut stream: TcpStream, storage: Arc<parking_lot::RwLock<Storage>>) {
+fn handle_client(mut stream: TcpStream, storage: Arc<parking_lot::RwLock<LockedStorage>>) {
     let mut buffer = [0; 1024 * 1024];
 
     loop {
@@ -663,9 +663,12 @@ fn main() -> anyhow::Result<()> {
     println!("Server listening on {addr}");
 
     let options = StorageOptions::default();
-    let storage = Arc::new(parking_lot::RwLock::new(Storage::new(options)));
+    let storage = Arc::new(parking_lot::RwLock::new(LockedStorage::new(options)));
     let persistent_path = "volatix.db";
-    storage.write().load_from_disk(persistent_path)?;
+    {
+        // avoid deadlock
+        storage.write().load_from_disk(persistent_path)?;
+    }
     let pool = ThreadPool::new(thread_count); // 4 threads
 
     let running = Arc::new(AtomicBool::new(true));
@@ -693,7 +696,7 @@ fn main() -> anyhow::Result<()> {
     // TODO: Figure this out
     println!("Saving data to disk...");
     storage.write().save_to_disk(persistent_path)?;
-    println!("Data saved successfully. Server shutdown complete.");
+    println!("Data saved successfully.");
 
     Ok(())
 }
