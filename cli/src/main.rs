@@ -3,7 +3,7 @@ use std::fmt::Display;
 use std::io::{Read, Write, stdin, stdout};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream};
 
-use server_lib::{RequestType, parse_rse_req};
+use server_lib::{RequestType, parse_request};
 
 #[derive(PartialEq, Debug, Eq)]
 enum Command {
