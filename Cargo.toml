@@ -46,4 +46,8 @@ rand = {workspace = true}
 serde = {workspace = true}
 
 [profile.release]
-debug = true
+# debug = true
+strip = true
+lto = "fat"
+opt-level = "s"
+codegen-units = 1

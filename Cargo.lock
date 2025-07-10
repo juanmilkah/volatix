@@ -264,6 +264,7 @@ dependencies = [
  "bincode2",
  "ctrlc",
  "flate2",
+ "parking_lot",
  "serde",
 ]
 

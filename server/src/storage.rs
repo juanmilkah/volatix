@@ -4,23 +4,34 @@ use std::{
     fs::{File, OpenOptions},
     io::{self, BufReader, BufWriter, Read, Write},
     path::Path,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, SystemTime},
 };
 
 use anyhow::Context;
 use flate2::bufread::{ZlibDecoder, ZlibEncoder};
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
 // Cons of BTreeMap compared to HashMap
 // Slower lookups: O(log n) time complexity for lookups vs O(1) average case for HashMap.
 // Slower insertions: O(log n) vs O(1) average for HashMap.
 // Slower deletions: O(log n) vs O(1) average for HashMap.
-#[derive(Default, Serialize, Deserialize)]
-pub struct Storage {
-    pub store: HashMap<String, StorageEntry>,
+#[derive(Default)]
+pub struct LockedStorage {
+    pub store: Arc<RwLock<HashMap<String, StorageEntry>>>,
     pub options: StorageOptions,
     pub stats: StorageStats,
+}
+
+#[derive(Serialize, Deserialize)]
+struct UnlockedStorage {
+    store: HashMap<String, StorageEntry>,
+    options: StorageOptions,
+    stats: NonAtomicStats,
 }
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -191,6 +202,15 @@ impl Display for StorageOptions {
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
+struct NonAtomicStats {
+    total_entries: usize,
+    hits: usize,
+    misses: usize,
+    evictions: usize,
+    expired_removals: usize,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct StorageStats {
     pub total_entries: AtomicUsize,
     pub hits: AtomicUsize,
@@ -266,53 +286,56 @@ fn compress(data: &str) -> Result<Vec<u8>, String> {
     Ok(output)
 }
 
-impl Storage {
+impl LockedStorage {
     pub fn new(options: StorageOptions) -> Self {
-        Storage {
-            // Not really sure whether this is a bad idea or not;
-            store: HashMap::with_capacity(1000),
+        LockedStorage {
+            store: Arc::new(RwLock::new(HashMap::with_capacity(1000))),
             options,
             stats: StorageStats::default(),
         }
     }
 
     pub fn flush(&mut self) {
-        *self = Storage::new(StorageOptions::default());
+        *self = LockedStorage::new(StorageOptions::default());
     }
 
-    pub fn get_entry(&mut self, key: &str) -> Option<StorageEntry> {
-        if let Some(entry) = self.store.get_mut(key) {
-            if !entry.is_expired() {
-                self.stats.hits.fetch_add(1, Ordering::Relaxed);
-                entry.access_count += 1;
-                entry.last_accessed = SystemTime::now();
-                if entry.compressed {
-                    match entry.decompress() {
-                        Ok(()) => (),
-                        Err(e) => {
-                            eprintln!("{e}");
-                            return None;
-                        }
-                    }
-                }
+    pub fn get_entry(&self, key: &str) -> Option<StorageEntry> {
+        let mut entry = if let Some(entry) = self.store.write().get_mut(key)
+            && !entry.is_expired()
+        {
+            entry.access_count += 1;
+            entry.last_accessed = SystemTime::now();
+            self.stats.hits.fetch_add(1, Ordering::Relaxed);
+            entry.clone()
+        } else {
+            self.stats.misses.fetch_add(1, Ordering::Relaxed);
+            return None;
+        };
 
-                return Some(entry.clone());
+        // You don't wanna move this into the if block;
+        // Tryna hold exclusive lock to store for as
+        // shortest time as possible
+        #[allow(clippy::collapsible_if)]
+        if entry.compressed {
+            if entry.decompress().is_err() {
+                eprintln!("Entry decompression on get_entry");
+                return None;
             }
         }
-        self.stats.misses.fetch_add(1, Ordering::Relaxed);
-        None
+
+        Some(entry.clone())
     }
 
-    pub fn key_exists(&mut self, key: &str) -> bool {
+    pub fn key_exists(&self, key: &str) -> bool {
         self.get_entry(key).is_some()
     }
 
     pub fn get_keys(&self) -> Vec<String> {
-        self.store.keys().cloned().collect()
+        self.store.read().keys().cloned().collect()
     }
 
     // batch operations
-    pub fn get_entries(&mut self, keys: &[String]) -> Vec<(String, Option<StorageEntry>)> {
+    pub fn get_entries(&self, keys: &[String]) -> Vec<(String, Option<StorageEntry>)> {
         let mut result = Vec::new();
         for key in keys {
             result.push((key.to_string(), self.get_entry(key)));
@@ -341,35 +364,35 @@ impl Storage {
     }
 
     pub fn increment_entry(&mut self, key: &str) {
-        if let Some(entry) = self.store.get_mut(key) {
-            if let StorageValue::Int(n) = entry.value {
-                entry.value = StorageValue::Int(n + 1);
-                entry.last_accessed = SystemTime::now();
-                entry.access_count += 1;
-                self.stats.hits.fetch_add(1, Ordering::Relaxed);
-                return;
-            }
+        if let Some(entry) = self.store.write().get_mut(key)
+            && let StorageValue::Int(n) = entry.value
+        {
+            entry.value = StorageValue::Int(n + 1);
+            entry.last_accessed = SystemTime::now();
+            entry.access_count += 1;
+            self.stats.hits.fetch_add(1, Ordering::Relaxed);
+            return;
         }
         self.stats.misses.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn decrement_entry(&mut self, key: &str) {
-        if let Some(entry) = self.store.get_mut(key) {
-            if let StorageValue::Int(n) = entry.value {
-                entry.value = StorageValue::Int(n - 1);
-                entry.last_accessed = SystemTime::now();
-                entry.access_count += 1;
-                self.stats.hits.fetch_add(1, Ordering::Relaxed);
-                return;
-            }
+        if let Some(entry) = self.store.write().get_mut(key)
+            && let StorageValue::Int(n) = entry.value
+        {
+            entry.value = StorageValue::Int(n - 1);
+            entry.last_accessed = SystemTime::now();
+            entry.access_count += 1;
+            self.stats.hits.fetch_add(1, Ordering::Relaxed);
+            return;
         }
 
         self.stats.misses.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn remove_entry(&mut self, key: &str) {
-        if self.store.remove_entry(key).is_some() {
-            self.stats.total_entries.fetch_add(1, Ordering::Relaxed);
+        if self.store.write().remove_entry(key).is_some() {
+            self.stats.total_entries.fetch_sub(1, Ordering::Relaxed);
         }
     }
 
@@ -407,13 +430,13 @@ impl Storage {
             compressed,
         };
 
-        self.store.insert(key, entry);
+        self.store.write().insert(key, entry);
         self.stats.total_entries.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 
     pub fn extend_ttl(&mut self, key: &str, additional_time: i64) -> Result<(), String> {
-        if let Some(entry) = self.store.get_mut(key) {
+        if let Some(entry) = self.store.write().get_mut(key) {
             if additional_time < 0 {
                 if additional_time.unsigned_abs() > entry.ttl.as_secs() {
                     return Err("UNALTERED".to_string());
@@ -430,47 +453,32 @@ impl Storage {
         Ok(())
     }
 
-    pub fn time_to_live(&mut self, key: &str) -> Option<Duration> {
-        if let Some(entry) = self.get_entry(key) {
-            return Some(entry.ttl);
-        }
-        None
+    pub fn time_to_live(&self, key: &str) -> Option<Duration> {
+        self.get_entry(key).map(|e| e.ttl)
     }
 
     fn is_full(&self) -> bool {
-        self.store.len() as u64 >= self.options.max_capacity
-    }
-
-    fn remove_oldest_entry(&mut self) {
-        let oldest_key = self
-            .store
-            .iter()
-            .min_by(|(_k1, v1), (_k2, v2)| v1.created_at.cmp(&v2.created_at))
-            .map(|(k, _v)| k.clone());
-
-        if let Some(key) = oldest_key {
-            self.remove_entry(&key);
-            self.stats.evictions.fetch_add(1, Ordering::Relaxed);
-            self.stats.total_entries.fetch_add(1, Ordering::Relaxed);
-        }
+        self.store.read().len() as u64 >= self.options.max_capacity
     }
 
     fn remove_expired(&mut self) {
-        let prev_count = self.store.keys().count();
+        let prev_count = self.store.read().len();
         let now = SystemTime::now();
-        self.store.retain(|_, value| {
-            now.duration_since(value.created_at)
-                .expect("clock gone backwards")
-                < value.ttl
-        });
-        let current_count = self.store.keys().count();
+        {
+            self.store.write().retain(|_, value| {
+                now.duration_since(value.created_at)
+                    .expect("clock gone backwards")
+                    < value.ttl
+            });
+        }
+        let current_count = self.store.read().len();
         let removed = prev_count - current_count;
         self.stats
             .expired_removals
             .fetch_add(removed, Ordering::Release);
         self.stats
             .total_entries
-            .store(self.store.keys().count(), Ordering::Release);
+            .store(current_count, Ordering::Release);
     }
 
     pub fn evict_entries(&mut self) {
@@ -492,12 +500,13 @@ impl Storage {
     pub fn remove_lru_entry(&mut self) {
         let key = self
             .store
+            .read()
             .iter()
             .min_by(|(_, v1), (_, v2)| v1.last_accessed.cmp(&v2.last_accessed))
             .map(|(k, _)| k.clone());
 
         if let Some(key) = key {
-            self.store.remove_entry(&key);
+            self.remove_entry(&key);
             self.stats.evictions.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -506,12 +515,13 @@ impl Storage {
     pub fn remove_lfu_entry(&mut self) {
         let key = self
             .store
+            .read()
             .iter()
             .min_by(|(_, v1), (_, v2)| v1.access_count.cmp(&v2.access_count))
             .map(|(k, _)| k.clone());
 
         if let Some(key) = key {
-            self.store.remove_entry(&key);
+            self.remove_entry(&key);
             self.stats.evictions.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -519,22 +529,37 @@ impl Storage {
     pub fn remove_largest_entry(&mut self) {
         let key = self
             .store
+            .read()
             .iter()
             .min_by(|(_, v1), (_, v2)| v1.entry_size.cmp(&v2.entry_size))
             .map(|(k, _)| k.clone());
 
         if let Some(key) = key {
-            self.store.remove_entry(&key);
+            self.remove_entry(&key);
+            self.stats.evictions.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn remove_oldest_entry(&mut self) {
+        let oldest_key = self
+            .store
+            .read()
+            .iter()
+            .min_by(|(_k1, v1), (_k2, v2)| v1.created_at.cmp(&v2.created_at))
+            .map(|(k, _v)| k.clone());
+
+        if let Some(key) = oldest_key {
+            self.remove_entry(&key);
             self.stats.evictions.fetch_add(1, Ordering::Relaxed);
         }
     }
 
     pub fn rename_entry(&mut self, old_key: &str, new_key: &str) {
-        if let Some((_, mut entry)) = self.store.remove_entry(old_key) {
+        if let Some((_, mut entry)) = self.store.write().remove_entry(old_key) {
             entry.access_count += 1;
             entry.last_accessed = SystemTime::now();
-            self.store.insert(new_key.to_string(), entry);
             self.stats.hits.fetch_add(1, Ordering::Relaxed);
+            self.store.write().insert(new_key.to_string(), entry);
             return;
         }
         self.stats.misses.fetch_add(1, Ordering::Relaxed);
@@ -595,7 +620,21 @@ impl Storage {
         let file = File::open(path).context("open db")?;
         let mut reader = BufReader::new(file);
 
-        *self = bincode2::deserialize_from(&mut reader).context("deserialize from buffer")?;
+        let unlocked_storage: UnlockedStorage =
+            bincode2::deserialize_from(&mut reader).context("deserialize from buffer")?;
+        let stats = StorageStats {
+            total_entries: AtomicUsize::new(unlocked_storage.stats.total_entries),
+            hits: AtomicUsize::new(unlocked_storage.stats.hits),
+            misses: AtomicUsize::new(unlocked_storage.stats.misses),
+            evictions: AtomicUsize::new(unlocked_storage.stats.evictions),
+            expired_removals: AtomicUsize::new(unlocked_storage.stats.expired_removals),
+        };
+
+        *self = LockedStorage {
+            store: Arc::new(RwLock::new(unlocked_storage.store)),
+            options: unlocked_storage.options,
+            stats,
+        };
 
         Ok(())
     }
@@ -610,7 +649,19 @@ impl Storage {
             .context("open db for writing")?;
 
         let mut writer = BufWriter::new(file);
-        bincode2::serialize_into(&mut writer, &self).context("serialize into db")?;
+        let stats = NonAtomicStats {
+            total_entries: self.stats.total_entries.load(Ordering::Relaxed),
+            hits: self.stats.hits.load(Ordering::Relaxed),
+            misses: self.stats.misses.load(Ordering::Relaxed),
+            evictions: self.stats.evictions.load(Ordering::Relaxed),
+            expired_removals: self.stats.expired_removals.load(Ordering::Relaxed),
+        };
+        let unlocked_storage = UnlockedStorage {
+            store: self.store.read().clone(),
+            options: self.options,
+            stats,
+        };
+        bincode2::serialize_into(&mut writer, &unlocked_storage).context("serialize into db")?;
         writer.flush().context("flush writer")?;
         Ok(())
     }
@@ -622,13 +673,13 @@ mod tests {
 
     use crate::{Compression, ConfigEntry, EvictionPolicy, StorageValue};
 
-    use super::{Storage, StorageOptions};
+    use super::{LockedStorage, StorageOptions};
 
     // Test default configuration
     #[test]
     fn test_default_options() {
-        let storage = Storage::default();
-        assert_eq!(storage.store.len(), 0);
+        let storage = LockedStorage::default();
+        assert_eq!(storage.store.read().len(), 0);
         assert_eq!(storage.options.ttl, Duration::from_secs(60 * 60 * 6));
         assert_eq!(storage.options.max_capacity, 1000 * 1000);
     }
@@ -645,17 +696,17 @@ mod tests {
             &Compression::Disabled,
             0,
         );
-        let storage = Storage::new(options);
+        let storage = LockedStorage::new(options);
 
         assert_eq!(storage.options.ttl, Duration::from_secs(30));
         assert_eq!(storage.options.max_capacity, 50);
-        assert_eq!(storage.store.len(), 0);
+        assert_eq!(storage.store.read().len(), 0);
     }
 
     // Test inserting and retrieving keys
     #[test]
     fn test_insert_and_get_key() {
-        let mut storage = Storage::default();
+        let mut storage = LockedStorage::default();
         let v = StorageValue::Text("test value".to_string());
         storage
             .insert_entry("test_key".to_string(), v.clone())
@@ -669,7 +720,7 @@ mod tests {
     // Test removing keys
     #[test]
     fn test_remove_entry() {
-        let mut storage = Storage::default();
+        let mut storage = LockedStorage::default();
         let v = StorageValue::Text("test value".to_string());
         storage.insert_entry("test_key".to_string(), v).unwrap();
 
@@ -682,7 +733,7 @@ mod tests {
     // Test removing non-existent key
     #[test]
     fn test_remove_nonexistent_key() {
-        let mut storage = Storage::default();
+        let mut storage = LockedStorage::default();
         storage.remove_entry("nonexistent_key");
         // Should not panic
     }
@@ -697,7 +748,7 @@ mod tests {
             &Compression::Disabled,
             0,
         );
-        let mut storage = Storage::new(options);
+        let mut storage = LockedStorage::new(options);
         let v1 = StorageValue::Text("value1".to_string());
         let v2 = StorageValue::Text("value2".to_string());
         let v3 = StorageValue::Text("value3".to_string());
@@ -708,13 +759,13 @@ mod tests {
         storage.insert_entry("key2".to_string(), v2).unwrap();
         storage.insert_entry("key3".to_string(), v3).unwrap();
 
-        assert_eq!(storage.store.len(), 3);
+        assert_eq!(storage.store.read().len(), 3);
         assert!(storage.is_full());
 
         // Insert one more - oldest should be removed
         storage.insert_entry("key4".to_string(), v4).unwrap();
 
-        assert_eq!(storage.store.len(), 3);
+        assert_eq!(storage.store.read().len(), 3);
         assert!(storage.get_entry("key1").is_none());
         assert!(storage.get_entry("key2").is_some());
         assert!(storage.get_entry("key3").is_some());
@@ -731,7 +782,7 @@ mod tests {
             &Compression::Disabled,
             0,
         );
-        let mut storage = Storage::new(options);
+        let mut storage = LockedStorage::new(options);
         let v1 = StorageValue::Text("value1".to_string());
         let v2 = StorageValue::Text("value2".to_string());
 
@@ -761,14 +812,14 @@ mod tests {
             &Compression::Disabled,
             0,
         );
-        let mut storage = Storage::new(options);
+        let mut storage = LockedStorage::new(options);
         let v1 = StorageValue::Text("value1".to_string());
         let v2 = StorageValue::Text("value2".to_string());
 
         storage.insert_entry("key1".to_string(), v1).unwrap();
         storage.insert_entry("key2".to_string(), v2).unwrap();
 
-        assert_eq!(storage.store.len(), 2);
+        assert_eq!(storage.store.read().len(), 2);
 
         // Wait for TTL to expire
         thread::sleep(Duration::from_millis(150));
@@ -776,7 +827,7 @@ mod tests {
         // Call remove_expired directly
         storage.remove_expired();
 
-        assert_eq!(storage.store.len(), 0);
+        assert_eq!(storage.store.read().len(), 0);
     }
 
     // Test that oldest entries are removed when capacity is reached
@@ -789,7 +840,7 @@ mod tests {
             &Compression::Disabled,
             0,
         );
-        let mut storage = Storage::new(options);
+        let mut storage = LockedStorage::new(options);
         let v1 = StorageValue::Text("value1".to_string());
         let v2 = StorageValue::Text("value2".to_string());
         let v3 = StorageValue::Text("value3".to_string());
@@ -802,13 +853,13 @@ mod tests {
         thread::sleep(Duration::from_millis(10));
         storage.insert_entry("key3".to_string(), v3).unwrap();
 
-        assert_eq!(storage.store.len(), 3);
+        assert_eq!(storage.store.read().len(), 3);
 
         // Insert a new key - should remove the oldest (key1)
         thread::sleep(Duration::from_millis(10));
         storage.insert_entry("key4".to_string(), v4).unwrap();
 
-        assert_eq!(storage.store.len(), 3);
+        assert_eq!(storage.store.read().len(), 3);
         assert!(storage.get_entry("key1").is_none());
         assert!(storage.get_entry("key2").is_some());
         assert!(storage.get_entry("key3").is_some());
@@ -818,7 +869,7 @@ mod tests {
     // Test updating an existing key
     #[test]
     fn test_update_existing_key() {
-        let mut storage = Storage::default();
+        let mut storage = LockedStorage::default();
 
         let v1 = StorageValue::Text("value1".to_string());
         let v2 = StorageValue::Text("updated value".to_string());
@@ -832,7 +883,7 @@ mod tests {
         storage.insert_entry("key1".to_string(), v2).unwrap();
         let updated_entry = storage.get_entry("key1").unwrap();
 
-        assert_eq!(storage.store.len(), 1);
+        assert_eq!(storage.store.read().len(), 1);
         assert_eq!(
             updated_entry.value,
             StorageValue::Text("updated value".to_string())
@@ -842,7 +893,7 @@ mod tests {
 
     #[test]
     fn test_insert_with_custom_ttl() {
-        let mut storage = Storage::default();
+        let mut storage = LockedStorage::default();
         let ttl = Duration::from_secs(5);
         let v1 = StorageValue::Text("custom val".to_string());
         storage
@@ -856,7 +907,7 @@ mod tests {
 
     #[test]
     fn test_extend_ttl() {
-        let mut storage = Storage::default();
+        let mut storage = LockedStorage::default();
         let original_ttl = Duration::from_secs(5);
         let extension = 10;
         let v1 = StorageValue::Text("val".to_string());
@@ -875,7 +926,7 @@ mod tests {
 
     #[test]
     fn test_extend_negative_ttl() {
-        let mut storage = Storage::default();
+        let mut storage = LockedStorage::default();
         let original_ttl = Duration::from_secs(5);
         let extension = -10; // would overflow
         let v1 = StorageValue::Text("val".to_string());
@@ -891,13 +942,13 @@ mod tests {
 
     #[test]
     fn test_time_to_live_none_for_missing_key() {
-        let mut storage = Storage::default();
+        let storage = LockedStorage::default();
         assert!(storage.time_to_live("missing").is_none());
     }
 
     #[test]
     fn test_get_entries_batch() {
-        let mut storage = Storage::default();
+        let mut storage = LockedStorage::default();
         let v1 = StorageValue::Text("value1".to_string());
         let v2 = StorageValue::Text("value2".to_string());
 
@@ -922,7 +973,7 @@ mod tests {
 
     #[test]
     fn test_insert_and_remove_entries_batch() {
-        let mut storage = Storage::default();
+        let mut storage = LockedStorage::default();
         let mut batch = HashMap::new();
         let v1 = StorageValue::Text("value1".to_string());
         let v2 = StorageValue::Text("value2".to_string());
@@ -947,7 +998,7 @@ mod tests {
             &Compression::Disabled,
             0,
         );
-        let mut storage = Storage::new(options);
+        let mut storage = LockedStorage::new(options);
         storage.set_config_entry(&ConfigEntry::EvictPolicy(EvictionPolicy::LRU));
         let v1 = StorageValue::Text("value1".to_string());
         let v2 = StorageValue::Text("value2".to_string());
@@ -971,7 +1022,7 @@ mod tests {
             &Compression::Disabled,
             0,
         );
-        let mut storage = Storage::new(options);
+        let mut storage = LockedStorage::new(options);
         storage.set_config_entry(&ConfigEntry::EvictPolicy(EvictionPolicy::LFU));
 
         let v1 = StorageValue::Text("value1".to_string());
@@ -996,7 +1047,7 @@ mod tests {
             &Compression::Disabled,
             0,
         );
-        let mut storage = Storage::new(options);
+        let mut storage = LockedStorage::new(options);
         storage.set_config_entry(&ConfigEntry::EvictPolicy(EvictionPolicy::SizeAware));
         let v1 = StorageValue::Text("v".to_string());
         let v2 = StorageValue::Text("valuevalue".to_string());
@@ -1012,7 +1063,7 @@ mod tests {
 
     #[test]
     fn test_reset_stats() {
-        let mut storage = Storage::default();
+        let mut storage = LockedStorage::default();
         let v1 = StorageValue::Text("value1".to_string());
         storage.insert_entry("k1".to_string(), v1).unwrap();
         storage.get_entry("k1");
