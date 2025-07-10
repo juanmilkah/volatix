@@ -202,7 +202,7 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<LockedSto
                     match &children[i] {
                         RequestType::BulkString { data } => {
                             let key = String::from_utf8_lossy(data).to_string();
-                            let entry = storage.write().get_entry(&key);
+                            let entry = storage.read().get_entry(&key);
 
                             match entry {
                                 Some(e) => bulk_string_response(Some(&e.value.to_string())),
@@ -221,7 +221,7 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<LockedSto
                     match &children[i] {
                         RequestType::BulkString { data } => {
                             let key = String::from_utf8_lossy(data).to_string();
-                            let exists = storage.write().key_exists(&key);
+                            let exists = storage.read().key_exists(&key);
                             boolean_response(exists)
                         }
                         _ => bulk_error_response("Invalid request type for EXISTS key"),
@@ -275,7 +275,7 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<LockedSto
                     match &children[i] {
                         RequestType::BulkString { data } => {
                             let key = String::from_utf8_lossy(data).to_string();
-                            let entry = storage.write().get_entry(&key);
+                            let entry = storage.read().get_entry(&key);
 
                             match entry {
                                 Some(e) => bulk_string_response(Some(&e.to_string())),
@@ -340,7 +340,7 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<LockedSto
                     match &children[i] {
                         RequestType::BulkString { data } => {
                             let key = String::from_utf8_lossy(data).to_string();
-                            let ttl = storage.write().time_to_live(&key);
+                            let ttl = storage.read().time_to_live(&key);
                             match ttl {
                                 Some(ttl) => integer_response(ttl.as_secs() as i64),
                                 None => null_response(),
@@ -462,7 +462,7 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<LockedSto
                         }
                     }
 
-                    let entries = storage.write().get_entries(&keys);
+                    let entries = storage.read().get_entries(&keys);
                     // Entries -> Vec<(String, Option<StorageEntry>)>
                     // Response -> [[key, value|null], [key, value|null]]
                     batch_entries_response(&entries)
@@ -695,7 +695,7 @@ fn main() -> anyhow::Result<()> {
 
     // TODO: Figure this out
     println!("Saving data to disk...");
-    storage.write().save_to_disk(persistent_path)?;
+    storage.read().save_to_disk(persistent_path)?;
     println!("Data saved successfully.");
 
     Ok(())

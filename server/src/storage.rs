@@ -326,7 +326,7 @@ impl LockedStorage {
         Some(entry.clone())
     }
 
-    pub fn key_exists(&mut self, key: &str) -> bool {
+    pub fn key_exists(&self, key: &str) -> bool {
         self.get_entry(key).is_some()
     }
 
@@ -335,7 +335,7 @@ impl LockedStorage {
     }
 
     // batch operations
-    pub fn get_entries(&mut self, keys: &[String]) -> Vec<(String, Option<StorageEntry>)> {
+    pub fn get_entries(&self, keys: &[String]) -> Vec<(String, Option<StorageEntry>)> {
         let mut result = Vec::new();
         for key in keys {
             result.push((key.to_string(), self.get_entry(key)));
