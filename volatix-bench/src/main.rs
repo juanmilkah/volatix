@@ -1,5 +1,4 @@
 use std::{
-    env::args,
     io::{Read, Write},
     net::TcpStream,
     sync::{Arc, atomic::AtomicUsize},
@@ -7,7 +6,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+use clap::Parser;
+
 const ADDRESS: &str = "127.0.0.1:7878";
+const DEFAULT_WORKER_COUNT: usize = 4;
+const DEFAULT_BENCH_DURATION: u64 = 30;
+const DEFAULT_RATIO: f64 = 0.7; // 70% read, 30% writes
 
 // $<length>\r\n<data>\r\n
 struct Bstring(String);
@@ -242,30 +246,33 @@ fn worker_thread(id: usize, config: &Config) {
     }
 }
 
+#[derive(Debug, Parser)]
+struct Cli {
+    #[arg(long = "compress", help = "Enable compression of large text/blobs")]
+    compression: bool,
+    #[arg(
+        short = 'd',
+        long = "duration",
+        help = "Duration of the benchmark in seconds"
+    )]
+    duration: Option<u64>,
+    #[arg(short = 'r', long = "ratio", help = "The ratio of reads to writes")]
+    ratio: Option<f64>,
+    #[arg(
+        short = 'w',
+        long = "workers",
+        help = "Number of worker threads(actual cpu threads)"
+    )]
+    workers: Option<usize>,
+}
+
 fn main() {
-    let args: Vec<String> = args().collect();
+    let args = Cli::parse();
 
-    let mut thread_count = 4;
-    let mut duration_secs = 60;
-    let mut mixed_ratio = 0.7; // 70% read, 30% writes
-    let mut compress = false;
-
-    for i in 1..args.len() {
-        if args[i] == "--theads" && i + 1 < args.len() {
-            thread_count = args[i + 1].parse().unwrap_or(4);
-        }
-
-        if args[i] == "--duration" && i + 1 < args.len() {
-            duration_secs = args[i + 1].parse().unwrap_or(60);
-        }
-
-        if args[i] == "--ratio" && i + 1 < args.len() {
-            mixed_ratio = args[i + 1].parse().unwrap_or(0.7);
-        }
-        if args[i] == "--compress" {
-            compress = true;
-        }
-    }
+    let thread_count = args.workers.unwrap_or(DEFAULT_WORKER_COUNT);
+    let duration_secs = args.duration.unwrap_or(DEFAULT_BENCH_DURATION);
+    let mixed_ratio = args.ratio.unwrap_or(DEFAULT_RATIO);
+    let compress = args.compression;
 
     println!("Starting performance test with:");
     println!("  - {thread_count} threads");
