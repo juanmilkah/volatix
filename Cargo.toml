@@ -30,20 +30,24 @@ path = "volatix-bench/src/main.rs"
 [workspace.dependencies]
 anyhow = "1.0.98"
 bincode2 = "2.0.1"
+clap = { version = "4.5.41", features = ["derive"] }
 ctrlc = "3.4.7"
 flate2 = "1.1.1"
 parking_lot = "0.12.3"
 rand = "0.9.1"
 serde = { version = "1.0.219", features = ["derive"] }
+tokio = { version = "1.46.1", features = ["full"] }
 
 [dependencies]
 anyhow = {workspace = true}
 bincode2 = {workspace = true}
+clap = {workspace = true}
 ctrlc = {workspace = true}
 flate2 = {workspace = true}
 parking_lot = {workspace = true}
 rand = {workspace = true}
 serde = {workspace = true}
+tokio = {workspace = true}
 
 [profile.release]
 # debug = true

@@ -6,10 +6,13 @@ edition = "2024"
 [dependencies]
 anyhow = {workspace = true}
 bincode2 = {workspace =true}
+clap = {workspace = true}
 ctrlc = {workspace = true}
 flate2 = {workspace =true}
 parking_lot = {workspace =true}
 serde = { workspace = true}
+tokio = {workspace = true}
+
 
 [[bin]]
 name = "server"

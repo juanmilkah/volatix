@@ -1,19 +1,19 @@
+const DEFAULT_PORT: u16 = 7878;
+
 use std::{
     collections::HashMap,
-    env::args,
-    io::{Read, Write},
-    net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream},
-    sync::{Arc, atomic::AtomicBool},
-    thread,
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
+    sync::Arc,
     time::Duration,
 };
 
-use anyhow::Context;
+use clap::Parser;
 use server_lib::{
     Compression, ConfigEntry, EvictionPolicy, LockedStorage, RequestType, StorageOptions,
-    StorageValue, ThreadPool, array_response, batch_entries_response, boolean_response,
-    bulk_error_response, bulk_string_response, integer_response, null_response, parse_request,
+    StorageValue, array_response, batch_entries_response, boolean_response, bulk_error_response,
+    bulk_string_response, integer_response, null_response, parse_request,
 };
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 enum Command {
     Get,
@@ -613,24 +613,29 @@ fn process_request(req: &RequestType, storage: Arc<parking_lot::RwLock<LockedSto
     }
 }
 
-fn handle_client(mut stream: TcpStream, storage: Arc<parking_lot::RwLock<LockedStorage>>) {
-    let mut buffer = [0; 1024 * 1024];
+async fn handle_client(
+    mut stream: tokio::net::TcpStream,
+    storage: Arc<parking_lot::RwLock<LockedStorage>>,
+) {
+    // pre-allocating a higher value may lead to
+    // the tokio worker overflowing it's stack
+    let mut buffer = [0; 1024];
 
     loop {
-        match stream.read(&mut buffer) {
+        match stream.read(&mut buffer).await {
             Ok(0) => break,
             Ok(n) => match parse_request(&buffer[..n]) {
                 Ok(req) => {
                     let storage = Arc::clone(&storage);
                     let response = process_request(&req, storage);
 
-                    if let Err(e) = stream.write_all(&response) {
+                    if let Err(e) = stream.write_all(&response).await {
                         eprintln!("ERROR: {e}");
                     }
                 }
                 Err(err) => {
                     let err = format!("Error parsing request: {err}");
-                    if let Err(e) = stream.write_all(err.as_bytes()) {
+                    if let Err(e) = stream.write_all(err.as_bytes()).await {
                         eprintln!("ERROR: {e}");
                     }
                 }
@@ -640,26 +645,19 @@ fn handle_client(mut stream: TcpStream, storage: Arc<parking_lot::RwLock<LockedS
     }
 }
 
-fn main() -> anyhow::Result<()> {
-    let args: Vec<_> = args().collect();
-    let mut thread_count = 5;
-    let mut port: u16 = 7878;
+#[derive(Debug, Parser)]
+struct Cli {
+    #[arg(short = 'p', long = "port", help = "Run server in a custom port")]
+    port: Option<u16>,
+}
 
-    for i in 1..args.len() {
-        if args[i] == "--threads" && i + 1 < args.len() {
-            thread_count = args[i + 1].parse().unwrap_or(4);
-        }
-
-        if args[i] == "--port" && i + 1 < args.len() {
-            port = args[i + 1].parse().unwrap_or(7878);
-        }
-    }
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let args = Cli::parse();
+    let port: u16 = args.port.unwrap_or(DEFAULT_PORT);
 
     let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port));
-    let listener = TcpListener::bind(addr)?;
-    listener
-        .set_nonblocking(true)
-        .context("Make listener non blocking")?;
+    let listener = tokio::net::TcpListener::bind(addr).await?;
     println!("Server listening on {addr}");
 
     let options = StorageOptions::default();
@@ -669,27 +667,28 @@ fn main() -> anyhow::Result<()> {
         // avoid deadlock
         storage.write().load_from_disk(persistent_path)?;
     }
-    let pool = ThreadPool::new(thread_count); // 4 threads
 
-    let running = Arc::new(AtomicBool::new(true));
-    let r = Arc::clone(&running);
-    ctrlc::set_handler(move || {
-        println!("Received Ctrl+C Interrupt Signal");
-        let r = Arc::clone(&running);
-        r.store(false, std::sync::atomic::Ordering::Relaxed);
-    })
-    .expect("setting up SIGINT handler");
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel(1);
+    let shutdown_sig = shutdown_tx.clone();
 
-    while r.load(std::sync::atomic::Ordering::Relaxed) {
-        match listener.accept() {
-            Ok((stream, _)) => {
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c().await?;
+        let _ = shutdown_sig.send(());
+        Ok::<(), std::io::Error>(())
+    });
+
+    loop {
+        tokio::select! {
+            _ = shutdown_rx.recv() =>{
+                println!("Received Shutdown Signal!");
+                break;
+            },
+            Ok((socket, _)) = listener.accept() =>{
                 let storage = Arc::clone(&storage);
-                pool.execute(|| handle_client(stream, storage));
+                tokio::spawn(async move{
+                    handle_client(socket, storage).await;
+                });
             }
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(10));
-            }
-            Err(e) => eprintln!("ERROR: {e}"),
         }
     }
 
