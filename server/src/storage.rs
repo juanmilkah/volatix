@@ -16,10 +16,6 @@ use flate2::bufread::{ZlibDecoder, ZlibEncoder};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
-// Cons of BTreeMap compared to HashMap
-// Slower lookups: O(log n) time complexity for lookups vs O(1) average case for HashMap.
-// Slower insertions: O(log n) vs O(1) average for HashMap.
-// Slower deletions: O(log n) vs O(1) average for HashMap.
 #[derive(Default)]
 pub struct LockedStorage {
     pub store: Arc<RwLock<HashMap<String, StorageEntry>>>,
