@@ -6,7 +6,6 @@ version = "0.1.0"
 edition = "2024"
 authors = ["Juan Milkah <juanmilkah@gmail.com>"]
 license = "MIT"
-rust-version = "1.88"
 
 [workspace]
 members = ["server", "cli", "volatix-bench"]
@@ -52,6 +51,6 @@ tokio = {workspace = true}
 [profile.release]
 # debug = true
 strip = true
-lto = "fat"
-opt-level = "s"
+lto = "thin"
+opt-level = 3
 codegen-units = 1

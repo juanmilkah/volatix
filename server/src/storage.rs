@@ -292,7 +292,7 @@ impl LockedStorage {
     }
 
     pub fn flush(&mut self) {
-        *self = LockedStorage::new(StorageOptions::default());
+        let _old_storage = std::mem::take(self);
     }
 
     pub fn get_entry(&self, key: &str) -> Option<StorageEntry> {
@@ -572,7 +572,7 @@ impl LockedStorage {
     }
 
     pub fn reset_stats(&mut self) {
-        self.stats = StorageStats::default();
+        let _old_stats = std::mem::take(&mut self.stats);
     }
 
     pub fn get_config_entry(&self, key: &str) -> Option<ConfigEntry> {
@@ -644,7 +644,6 @@ impl LockedStorage {
             .open(path)
             .context("open db for writing")?;
 
-        let mut writer = BufWriter::new(file);
         let stats = NonAtomicStats {
             total_entries: self.stats.total_entries.load(Ordering::Relaxed),
             hits: self.stats.hits.load(Ordering::Relaxed),
@@ -657,6 +656,7 @@ impl LockedStorage {
             options: self.options,
             stats,
         };
+        let mut writer = BufWriter::new(file);
         bincode2::serialize_into(&mut writer, &unlocked_storage).context("serialize into db")?;
         writer.flush().context("flush writer")?;
         Ok(())

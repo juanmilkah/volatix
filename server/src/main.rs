@@ -677,6 +677,12 @@ async fn main() -> anyhow::Result<()> {
         Ok::<(), std::io::Error>(())
     });
 
+    let snapshots_storage = Arc::clone(&storage);
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        let _ = snapshots_storage.read().save_to_disk(persistent_path);
+    });
+
     loop {
         tokio::select! {
             _ = shutdown_rx.recv() =>{
