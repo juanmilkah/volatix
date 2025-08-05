@@ -248,6 +248,10 @@ fn parse_integers(data: &[u8]) -> Result<(RequestType, usize), String> {
             i += 1;
             Some(b'-')
         }
+        b'+' => {
+            i += 1;
+            Some(b'+')
+        }
         _ => None,
     };
 
@@ -420,6 +424,10 @@ fn parse_doubles(data: &[u8]) -> Result<(RequestType, usize), String> {
             i += 1;
             Some(b'-')
         }
+        b'+' => {
+            i += 1;
+            Some(b'+')
+        }
         _ => None,
     };
 
@@ -549,6 +557,10 @@ fn parse_big_numbers(data: &[u8]) -> Result<(RequestType, usize), String> {
         b'-' => {
             i += 1;
             Some(b'-')
+        }
+        b'+' => {
+            i += 1;
+            Some(b'+')
         }
         _ => None,
     };
@@ -877,6 +889,28 @@ mod resp3_tests {
                 data: vec![b'1', b'.', b'2', b'3']
             }
         );
+
+        let n = b",+1.23\r\n";
+        let (data, consumed) = parse_doubles(&n[1..]).unwrap();
+
+        assert!(consumed > 0);
+        assert_eq!(
+            data,
+            RequestType::Double {
+                data: vec![b'+', b'1', b'.', b'2', b'3']
+            }
+        );
+
+        let n = b",-1.23\r\n";
+        let (data, consumed) = parse_doubles(&n[1..]).unwrap();
+
+        assert!(consumed > 0);
+        assert_eq!(
+            data,
+            RequestType::Double {
+                data: vec![b'-', b'1', b'.', b'2', b'3']
+            }
+        );
     }
 
     #[test]
@@ -1098,6 +1132,24 @@ mod resp3_tests {
                 children: vec![
                     RequestType::Integer { data: vec![b'1'] },
                     RequestType::Integer { data: vec![b'2'] },
+                    RequestType::Integer { data: vec![b'3'] }
+                ]
+            }
+        );
+
+        let s = b"*3\r\n:-1\r\n:+2\r\n:3\r\n";
+
+        let result = parse_request(s).unwrap();
+        assert_eq!(
+            result,
+            RequestType::Array {
+                children: vec![
+                    RequestType::Integer {
+                        data: vec![b'-', b'1']
+                    },
+                    RequestType::Integer {
+                        data: vec![b'+', b'2']
+                    },
                     RequestType::Integer { data: vec![b'3'] }
                 ]
             }
