@@ -821,9 +821,6 @@ fn help() {
 
     println!("  Batch Operations:");
     println!("    SETLIST key [value, value, ...]              # Set an array of values");
-    println!(
-        "    SETJSON {{key, value, ...}}              # Set multiple key-value pairs (map syntax)"
-    );
     println!("    SETMAP {{\"key\": \"value\"}}                # Set a map of key-value pairs");
     println!("    GETLIST [key, key, ...]                # Get values for multiple keys");
     println!("    DELETELIST [key, key, ...]             # Delete multiple keys");
