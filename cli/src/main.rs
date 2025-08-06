@@ -3,7 +3,7 @@ use std::fmt::Display;
 use std::io::{Read, Write, stdin, stdout};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream};
 
-use ::server_lib::{RequestType, parse_request};
+use ::server_lib::resp3::{RequestType, parse_request};
 
 #[derive(PartialEq, Debug, Eq)]
 enum Command {
@@ -29,6 +29,7 @@ enum Command {
         list: Vec<String>,
     },
     SetList {
+        key: String,
         list: Vec<String>,
     },
     SetMap {
@@ -296,15 +297,18 @@ fn parse_line(line: &str) -> Command {
             Err(e) => Command::ParseError(e),
         },
 
-        // SETLIST ["foo", "bar", "foofoo", "barbar"]
-        "SETLIST" => match parse_list(&chars, &mut pointer) {
-            Ok(l) => {
-                if l.len() % 2 != 0 {
-                    Command::ParseError("Invalid number of args".to_string())
-                } else {
-                    Command::SetList { list: l }
+        // SETLIST names ["foo", "bar", "foofoo", "barbar"]
+        "SETLIST" => match parse_arg(&chars, &mut pointer, "key") {
+            Ok(key) => match parse_list(&chars, &mut pointer) {
+                Ok(l) => {
+                    if l.len() % 2 != 0 {
+                        Command::ParseError("Invalid number of args".to_string())
+                    } else {
+                        Command::SetList { key, list: l }
+                    }
                 }
-            }
+                Err(e) => Command::ParseError(e),
+            },
             Err(e) => Command::ParseError(e),
         },
 
@@ -515,18 +519,17 @@ fn serialize_request(command: &Command) -> Vec<u8> {
             arr.as_bytes().to_vec()
         }
 
-        // [command, [key, value], [key, value]]
-        Command::SetList { list } => {
-            let mut arr = vec![bstring("SETLIST")];
-            let list: Vec<String> = list
-                .iter()
-                .map(|elem| bstring(elem))
-                .collect::<Vec<String>>()
-                .chunks(2)
-                .map(|pair| array(&[pair[0].to_string(), pair[1].to_string()]))
-                .collect();
+        // command [key,  [value, value, ..]]
+        Command::SetList { key, list } => {
+            let mut vals = Vec::new();
+            for v in list {
+                vals.push(bstring(v));
+            }
 
-            arr.extend_from_slice(&list);
+            let outer_array = vec![bstring(key), array(&vals)];
+            let outer_array = array(&outer_array);
+
+            let arr = vec![bstring("SETLIST"), outer_array];
 
             let arr = array(&arr);
             arr.as_bytes().to_vec()
@@ -684,8 +687,8 @@ impl Display for Response {
 // SET foo bar
 // GET foo -> "bar"
 // GET bar -> NULL
-// SETLIST [foo, foofoo, bar, barbar, baz, bazbaz]
-// GETLIST [foo, bar,baz] -> [[foo, foofoo], [bar, barbar], [baz, bazbaz]]
+// SETLIST  names [foo, foofoo, bar, barbar, baz, bazbaz]
+// GETLIST [foo, bar, baz] -> [[foo, foofoo], [bar, barbar], [baz, bazbaz]]
 fn deserialize_response(resp: &[u8]) -> Result<Response, String> {
     let resp = parse_request(resp)?;
 
@@ -817,11 +820,9 @@ fn help() {
     println!();
 
     println!("  Batch Operations:");
+    println!("    SETLIST key [value, value, ...]              # Set an array of values");
     println!(
-        "    SETLIST [key, value, ...]              # Set multiple key-value pairs (array syntax)"
-    );
-    println!(
-        "    SETLIST {{key, value, ...}}              # Set multiple key-value pairs (map syntax)"
+        "    SETJSON {{key, value, ...}}              # Set multiple key-value pairs (map syntax)"
     );
     println!("    SETMAP {{\"key\": \"value\"}}                # Set a map of key-value pairs");
     println!("    GETLIST [key, key, ...]                # Get values for multiple keys");
@@ -1207,5 +1208,17 @@ mod cli_parsing {
         ]);
 
         assert_eq!(map, expected);
+    }
+
+    #[test]
+    fn test_parse_setlist() {
+        let line = "SETLIST names ['foo', 'bar']";
+        assert_eq!(
+            parse_line(line),
+            Command::SetList {
+                key: "names".to_string(),
+                list: vec!["foo".to_string(), "bar".to_string()]
+            }
+        )
     }
 }
