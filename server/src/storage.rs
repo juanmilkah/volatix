@@ -37,6 +37,8 @@ pub enum StorageValue {
     Bool(bool),
     Text(String),
     Bytes(Vec<u8>),
+    List(Vec<StorageValue>),
+    Map(Vec<(String, StorageValue)>),
 }
 
 impl Display for StorageValue {
@@ -47,6 +49,8 @@ impl Display for StorageValue {
             StorageValue::Bool(b) => write!(f, "{b}"),
             StorageValue::Text(t) => write!(f, "{t}"),
             StorageValue::Bytes(b) => write!(f, "{b:?}"),
+            StorageValue::List(storage_values) => write!(f, "{storage_values:?}"),
+            StorageValue::Map(items) => write!(f, "{items:?}"),
         }
     }
 }
@@ -57,11 +61,15 @@ impl StorageValue {
             StorageValue::Int(_) => size_of_val(self),
             StorageValue::Float(_) => size_of_val(self),
             StorageValue::Bool(_) => size_of_val(self),
-            // size_of_val(self) only captures the size of the
-            // String struct (usually 24 bytes on 64-bit systems).
-            // The actual bytes on the heap are in s.capacity()
             StorageValue::Text(t) => size_of_val(self) + t.capacity(),
             StorageValue::Bytes(b) => b.len(),
+            StorageValue::List(storage_values) => {
+                storage_values.iter().map(|s| s.size_in_bytes()).sum()
+            }
+            StorageValue::Map(items) => items
+                .iter()
+                .map(|(k, v)| k.capacity() + v.size_in_bytes())
+                .sum(),
         }
     }
 }
@@ -667,9 +675,7 @@ impl LockedStorage {
 mod tests {
     use std::{collections::HashMap, sync::atomic::Ordering, thread, time::Duration};
 
-    use crate::{Compression, ConfigEntry, EvictionPolicy, StorageValue};
-
-    use super::{LockedStorage, StorageOptions};
+    use super::*;
 
     // Test default configuration
     #[test]

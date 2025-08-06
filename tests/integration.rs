@@ -70,41 +70,75 @@ mod integration {
     }
 
     macro_rules! setlist {
-        ($cmd:expr, $($key:expr, $value:expr),+ $(,)?) => {
+        ($cmd:expr, $key:expr, $($value:expr),+ $(,)?) => {
             {
                 let cmd_bstring = bstring!($cmd);
-                let mut pairs = Vec::new();
+                let key_bstring = bstring!($key);
+                let mut vals = Vec::new();
+
+                $(
+                    let value_bstring = bstring!($value);
+                    vals.push(value_bstring);
+                )*
+
+                let terminator = "\r\n";
+
+                let mut vals_array = String::new();
+                vals_array.push('*');
+                vals_array.push_str(&vals.len().to_string());
+                vals_array.push_str(terminator);
+                for elem in vals {
+                    vals_array.push_str(&elem);
+                }
+
+
+                let mut final_array = String::new();
+                final_array.push('*');
+                final_array.push_str("3");
+                final_array.push_str(terminator);
+                final_array.push_str(&cmd_bstring);
+                final_array.push_str(&key_bstring);
+                final_array.push_str(&vals_array);
+
+                final_array.as_bytes().to_vec()
+            }
+        };
+    }
+
+    macro_rules! setmap {
+        ($cmd:expr, $(($key:expr, $value:expr)),+ $(,)?) => {
+        {
+            let mut map = Vec::new();
 
                 $(
                     let key_bstring = bstring!($key);
                     let value_bstring = bstring!($value);
 
-                    // Create the array for this pair
-                    let mut pair_array = String::new();
-                    let terminator = "\r\n";
-                    pair_array.push('*');
-                    pair_array.push_str("2");
-                    pair_array.push_str(terminator);
-                    pair_array.push_str(&key_bstring);
-                    pair_array.push_str(&value_bstring);
-
-                    pairs.push(pair_array);
+                    map.push((key_bstring, value_bstring));
                 )*
 
-                // Create the final array with command and all pairs
-                let mut final_array = String::new();
                 let terminator = "\r\n";
-                final_array.push('*');
-                final_array.push_str(&(1 + pairs.len()).to_string());
-                final_array.push_str(terminator);
-                final_array.push_str(&cmd_bstring);
-                for pair in pairs {
-                    final_array.push_str(&pair);
+                let mut map_string = String::new();
+                map_string.push('%');
+                map_string.push_str(&map.len().to_string());
+                map_string.push_str(terminator);
+
+                for (k, v) in map{
+                    map_string.push_str(&k);
+                    map_string.push_str(&v);
                 }
 
-                final_array.as_bytes().to_vec()
+                let cmd = bstring!($cmd);
+                let mut arr = String::new();
+                arr.push('*');
+                arr.push_str("2");
+                arr.push_str(terminator);
+                arr.push_str(&cmd);
+                arr.push_str(&map_string);
+
+                arr.as_bytes().to_vec()
             }
-        };
+        }
     }
 
     fn send_request(mut stream: &TcpStream, req: &[u8]) -> io::Result<RequestType> {
@@ -174,7 +208,7 @@ mod integration {
         let addr: SocketAddr = "127.0.0.1:7878".parse().unwrap();
         let stream = TcpStream::connect(addr).unwrap();
 
-        let setlist_req = setlist!("SETLIST", "foo", "bar", "bar", "baz");
+        let setlist_req = setlist!("SETLIST", "foo", "bar", "baz");
         let getlist_req = array!("GETLIST", "foo", "bar");
         let deletelist_req = array!("DELETELIST", "foo", "bar");
 
@@ -192,8 +226,15 @@ mod integration {
                         RequestType::BulkString {
                             data: b"foo".to_vec(),
                         },
-                        RequestType::BulkString {
-                            data: b"bar".to_vec(),
+                        RequestType::Array {
+                            children: vec![
+                                RequestType::BulkString {
+                                    data: b"bar".to_vec(),
+                                },
+                                RequestType::BulkString {
+                                    data: b"baz".to_vec(),
+                                },
+                            ],
                         },
                     ],
                 },
@@ -202,9 +243,7 @@ mod integration {
                         RequestType::BulkString {
                             data: b"bar".to_vec(),
                         },
-                        RequestType::BulkString {
-                            data: b"baz".to_vec(),
-                        },
+                        RequestType::Null,
                     ],
                 },
             ],
@@ -214,6 +253,39 @@ mod integration {
 
         let resp = send_request(&stream, &deletelist_req).unwrap();
         assert_eq!(resp, success_resp);
+    }
+
+    #[test]
+    fn test_set_get_delete_maps() {
+        let addr: SocketAddr = "127.0.0.1:7878".parse().unwrap();
+        let stream = TcpStream::connect(addr).unwrap();
+
+        let setmap_req = setmap!("SETMAP", ("mwak", "peep"), ("baz", "choi"));
+        dbg!(&setmap_req);
+
+        let resp = send_request(&stream, &setmap_req).unwrap();
+        let success_resp = RequestType::BulkString {
+            data: b"SUCCESS".to_vec(),
+        };
+        assert_eq!(resp, success_resp);
+
+        let get_req = array!("GET", "mwak");
+        let resp = send_request(&stream, &get_req).unwrap();
+        assert_eq!(
+            resp,
+            RequestType::BulkString {
+                data: b"peep".to_vec()
+            }
+        );
+
+        let get_req = array!("GET", "baz");
+        let resp = send_request(&stream, &get_req).unwrap();
+        assert_eq!(
+            resp,
+            RequestType::BulkString {
+                data: b"choi".to_vec()
+            }
+        );
     }
 
     #[test]

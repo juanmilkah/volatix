@@ -1,7 +1,7 @@
 // Redis Serialization Protocol v3.0
 use std::collections::{HashMap, HashSet};
 
-use crate::StorageEntry;
+use crate::{StorageValue, storage::StorageEntry};
 
 pub fn array_response(data: &Vec<String>) -> Vec<u8> {
     let mut arr = String::new();
@@ -73,6 +73,67 @@ pub fn integer_response(i: i64) -> Vec<u8> {
     format!(":{i}\r\n").as_bytes().to_vec()
 }
 
+fn storage_value_to_string(value: &StorageValue) -> String {
+    let delim = "\r\n";
+    match value {
+        StorageValue::Int(_)
+        | StorageValue::Float(_)
+        | StorageValue::Bool(_)
+        | StorageValue::Bytes(_)
+        | StorageValue::Text(_) => {
+            let mut v = String::new();
+            v.push('$');
+            v.push_str(&value.to_string().len().to_string());
+            v.push_str(delim);
+            v.push_str(&value.to_string());
+            v.push_str(delim);
+
+            v
+        }
+        StorageValue::List(storage_values) => {
+            let mut outer = String::new();
+            outer.push('*');
+            outer.push_str(&storage_values.len().to_string());
+            outer.push_str(delim);
+
+            for inner in storage_values {
+                let mut v = String::new();
+                v.push('$');
+                v.push_str(&inner.to_string().len().to_string());
+                v.push_str(delim);
+                v.push_str(&inner.to_string());
+                v.push_str(delim);
+
+                outer.push_str(&v);
+            }
+
+            outer
+        }
+        StorageValue::Map(items) => {
+            let mut outer = String::new();
+            outer.push('%');
+            outer.push_str(&items.len().to_string());
+            outer.push_str(delim);
+
+            for (key, value) in items {
+                let mut k = String::new();
+                k.push('$');
+                k.push_str(&key.to_string().len().to_string());
+                k.push_str(delim);
+                k.push_str(&key.to_string());
+                k.push_str(delim);
+
+                let val = storage_value_to_string(value);
+
+                outer.push_str(key);
+                outer.push_str(&val);
+            }
+
+            outer
+        }
+    }
+}
+
 // *<number-of-elements>\r\n<element-1>...<element-n>
 //  [[key, value|null], [key, value|null]]
 pub fn batch_entries_response(data: &[(String, Option<StorageEntry>)]) -> Vec<u8> {
@@ -100,18 +161,8 @@ pub fn batch_entries_response(data: &[(String, Option<StorageEntry>)]) -> Vec<u8
 
         let value = {
             match value {
-                Some(value) => {
-                    let value = value.value.to_string();
-                    let mut v = String::new();
-                    v.push('$');
-                    v.push_str(&value.len().to_string());
-                    v.push_str(delim);
-                    v.push_str(&value);
-                    v.push_str(delim);
-
-                    v
-                }
                 None => "$-1\r\n".to_string(),
+                Some(v) => storage_value_to_string(&v.value),
             }
         };
 
@@ -761,16 +812,17 @@ fn parse_nested_entry(data: &[u8]) -> Result<(RequestType, usize), String> {
         DataType::SimpleError => parse_simple_errors(&data[1..])?,
         DataType::BulkString => parse_bulk_strings(&data[1..])?,
         DataType::Integer => parse_integers(&data[1..])?,
-        DataType::Array => todo!(),
         DataType::Null => parse_null(&data[1..])?,
         DataType::Boolean => parse_booleans(&data[1..])?,
         DataType::Double => parse_doubles(&data[1..])?,
         DataType::BigNumber => parse_big_numbers(&data[1..])?,
         DataType::BulkError => parse_bulk_errors(&data[1..])?,
-        DataType::VerbatimString => todo!(),
-        DataType::Maps => todo!(),
-        DataType::Sets => todo!(),
         DataType::Unknown => return Err(format!("Unknown datatype: {}", data[0])),
+        _ => return Err("Unreachable end".to_string()),
+        // DataType::Array => todo!(),
+        // DataType::Maps => todo!(),
+        // DataType::Sets => todo!(),
+        // DataType::VerbatimString => todo!(),
     };
 
     Ok((content, consumed + 1))
