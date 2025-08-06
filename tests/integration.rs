@@ -106,7 +106,39 @@ mod integration {
     }
 
     macro_rules! setmap {
-        () => {};
+        ($cmd:expr, $(($key:expr, $value:expr)),+ $(,)?) => {
+        {
+            let mut map = Vec::new();
+
+                $(
+                    let key_bstring = bstring!($key);
+                    let value_bstring = bstring!($value);
+
+                    map.push((key_bstring, value_bstring));
+                )*
+
+                let terminator = "\r\n";
+                let mut map_string = String::new();
+                map_string.push('%');
+                map_string.push_str(&map.len().to_string());
+                map_string.push_str(terminator);
+
+                for (k, v) in map{
+                    map_string.push_str(&k);
+                    map_string.push_str(&v);
+                }
+
+                let cmd = bstring!($cmd);
+                let mut arr = String::new();
+                arr.push('*');
+                arr.push_str("2");
+                arr.push_str(terminator);
+                arr.push_str(&cmd);
+                arr.push_str(&map_string);
+
+                arr.as_bytes().to_vec()
+            }
+        }
     }
 
     fn send_request(mut stream: &TcpStream, req: &[u8]) -> io::Result<RequestType> {
@@ -221,6 +253,39 @@ mod integration {
 
         let resp = send_request(&stream, &deletelist_req).unwrap();
         assert_eq!(resp, success_resp);
+    }
+
+    #[test]
+    fn test_set_get_delete_maps() {
+        let addr: SocketAddr = "127.0.0.1:7878".parse().unwrap();
+        let stream = TcpStream::connect(addr).unwrap();
+
+        let setmap_req = setmap!("SETMAP", ("mwak", "peep"), ("baz", "choi"));
+        dbg!(&setmap_req);
+
+        let resp = send_request(&stream, &setmap_req).unwrap();
+        let success_resp = RequestType::BulkString {
+            data: b"SUCCESS".to_vec(),
+        };
+        assert_eq!(resp, success_resp);
+
+        let get_req = array!("GET", "mwak");
+        let resp = send_request(&stream, &get_req).unwrap();
+        assert_eq!(
+            resp,
+            RequestType::BulkString {
+                data: b"peep".to_vec()
+            }
+        );
+
+        let get_req = array!("GET", "baz");
+        let resp = send_request(&stream, &get_req).unwrap();
+        assert_eq!(
+            resp,
+            RequestType::BulkString {
+                data: b"choi".to_vec()
+            }
+        );
     }
 
     #[test]

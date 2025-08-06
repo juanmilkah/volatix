@@ -34,8 +34,7 @@ fn request_type_to_storage_value(req: &RequestType) -> Result<StorageValue, Stri
         RequestType::Array { children } => {
             let elems = children
                 .iter()
-                .map(|c| request_type_to_storage_value(c))
-                .flatten()
+                .flat_map(request_type_to_storage_value)
                 .collect();
             Ok(StorageValue::List(elems))
         }
@@ -250,7 +249,7 @@ fn handle_get_command(
     children: &[RequestType],
     storage: Arc<parking_lot::RwLock<LockedStorage>>,
 ) -> Vec<u8> {
-    if children.len() < 1 {
+    if children.is_empty() {
         return bulk_error_response("Command missing some arguments");
     }
 
@@ -272,7 +271,7 @@ fn handle_exists_command(
     children: &[RequestType],
     storage: Arc<parking_lot::RwLock<LockedStorage>>,
 ) -> Vec<u8> {
-    if children.len() < 1 {
+    if children.is_empty() {
         return bulk_error_response("Command missing some arguments");
     }
 
@@ -318,7 +317,7 @@ fn handle_delete_command(
     children: &[RequestType],
     storage: Arc<parking_lot::RwLock<LockedStorage>>,
 ) -> Vec<u8> {
-    if children.len() < 1 {
+    if children.is_empty() {
         return bulk_error_response("Command missing some arguments");
     }
 
@@ -336,7 +335,7 @@ fn handle_dump_command(
     children: &[RequestType],
     storage: Arc<parking_lot::RwLock<LockedStorage>>,
 ) -> Vec<u8> {
-    if children.len() < 1 {
+    if children.is_empty() {
         return bulk_error_response("Command missing some arguments");
     }
 
@@ -358,7 +357,7 @@ fn handle_confget_command(
     children: &[RequestType],
     storage: Arc<parking_lot::RwLock<LockedStorage>>,
 ) -> Vec<u8> {
-    if children.len() < 1 {
+    if children.is_empty() {
         return bulk_error_response("Command missing some arguments");
     }
 
@@ -411,7 +410,7 @@ fn handle_getttl_command(
     children: &[RequestType],
     storage: Arc<parking_lot::RwLock<LockedStorage>>,
 ) -> Vec<u8> {
-    if children.len() < 1 {
+    if children.is_empty() {
         return bulk_error_response("Command missing some arguments");
     }
 
@@ -656,7 +655,7 @@ fn handle_incr_command(
     children: &[RequestType],
     storage: Arc<parking_lot::RwLock<LockedStorage>>,
 ) -> Vec<u8> {
-    if children.len() < 1 {
+    if children.is_empty() {
         return bulk_error_response("Command missing some arguments");
     }
     match &children[0] {
@@ -674,7 +673,7 @@ fn handle_decr_command(
     children: &[RequestType],
     storage: Arc<parking_lot::RwLock<LockedStorage>>,
 ) -> Vec<u8> {
-    if children.len() < 1 {
+    if children.is_empty() {
         return bulk_error_response("Command missing some arguments");
     }
     match &children[0] {

@@ -125,7 +125,7 @@ fn storage_value_to_string(value: &StorageValue) -> String {
 
                 let val = storage_value_to_string(value);
 
-                outer.push_str(&key);
+                outer.push_str(key);
                 outer.push_str(&val);
             }
 
