@@ -14,13 +14,13 @@ cargo build --release
 ## Start server
 
 ```bash
-  cargo run --release --bin server [--threads<1..>]
+  cargo run --release --bin volatix-server [--threads<1..>]
 ```
 
 ## Start cli repl
 
 ```bash
-  cargo run --release --bin cli
+  cargo run --release --bin volatix-cli
 ```
 
 ## Benchmarking
