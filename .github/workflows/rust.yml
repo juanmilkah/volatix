@@ -40,15 +40,15 @@ jobs:
       run: cargo build --verbose
     
     - name: Build release binary
-      run: cargo build --release --bin server
+      run: cargo build --release --bin volatix-server
     
     - name: Start server for integration tests
       run: |
-        cargo run --release --bin server &
+        cargo run --release --bin volatix-server &
         SERVER_PID=$!
         echo "SERVER_PID=$SERVER_PID" >> $GITHUB_ENV
         # Wait for server to be ready
-        sleep 5 # five seconds
+        sleep 3 # three seconds
     
     - name: Run tests + Integration tests
       run: |
