@@ -1,124 +1,157 @@
 use std::collections::HashMap;
 
+/// Enum representing all supported Volatix database commands
+/// Each variant contains the necessary parameters for the command
 #[derive(PartialEq, Debug, Eq)]
 pub enum Command {
-    Hello,
+    // Connection and utility commands
+    Hello,              // Initial handshake command
+    Help,               // Local help display (not sent to server)
+    ParseError(String), // Error in command parsing
+
+    // Basic key-value operations
     Get {
         key: String,
-    },
-
-    Exists {
-        key: String,
-    },
-
+    }, // Retrieve value for a key
     Set {
         key: String,
         value: String,
-    },
+    }, // Store key-value pair
+    Exists {
+        key: String,
+    }, // Check if key exists
     Delete {
         key: String,
-    },
-    Help,
-    ParseError(String),
+    }, // Remove a key
+
+    // Numeric operations
+    Incr {
+        key: String,
+    }, // Increment numeric value by 1
+    Decr {
+        key: String,
+    }, // Decrement numeric value by 1
+
+    // Key management
+    Rename {
+        old_key: String,
+        new_key: String,
+    }, // Rename a key
+    Keys,  // List all keys in database
+    Flush, // Clear entire database
+
+    // Batch operations for efficiency
     GetList {
         list: Vec<String>,
-    },
+    }, // Get multiple keys at once
     SetList {
         key: String,
         list: Vec<String>,
-    },
+    }, // Set array of values for a key
     SetMap {
         map: HashMap<String, String>,
-    },
+    }, // Set multiple key-value pairs
     DeleteList {
         list: Vec<String>,
-    },
-    GetStats,
-    ResetStats,
-    // if ttl is negative, the value should be expired on creation
+    }, // Delete multiple keys at once
+
+    // Statistics and monitoring
+    GetStats,   // Get global database statistics
+    ResetStats, // Reset statistics counters
+    Dump {
+        key: String,
+    }, // Get detailed stats for specific key
+
+    // TTL (Time-to-Live) management
     SetwTtl {
         key: String,
         value: String,
         ttl: u64,
-    },
-
-    // allow increment and decrement by using i64
+    }, // Set key with expiration time
     Expire {
         key: String,
         addition: i64,
-    },
+    }, // Modify TTL (positive=extend, negative=reduce)
     GetTtl {
         key: String,
-    },
-    // set a config value like global ttl
+    }, // Get remaining TTL for key
+    EvictNow, // Trigger immediate eviction using policy
+
+    // Configuration management
     ConfSet {
         key: String,
         value: String,
-    },
+    }, // Set configuration parameter
     ConfGet {
         key: String,
-    },
-    Dump {
-        key: String,
-    },
-
-    ConfOptions,
-
-    EvictNow,
-    Flush,
-    Incr {
-        key: String,
-    },
-    Decr {
-        key: String,
-    },
-    Rename {
-        old_key: String,
-        new_key: String,
-    },
-    Keys,
+    }, // Get configuration parameter
+    ConfOptions, // List all configurable options
 }
 
+/// Parses a single argument from the character stream
+/// Handles quoted strings, whitespace, and various delimiters
+///
+/// # Arguments
+/// * `chars` - Array of characters representing the input
+/// * `pointer` - Mutable reference to current position in chars
+/// * `arg_name` - Name of argument for error messages
+///
+/// # Returns
+/// * `Ok(String)` - Successfully parsed argument
+/// * `Err(String)` - Parse error with descriptive message
 pub fn parse_arg(chars: &[char], pointer: &mut usize, arg_name: &str) -> Result<String, String> {
     let l = chars.len();
+
+    // Skip leading whitespace
     while *pointer < l && chars[*pointer].is_whitespace() {
         *pointer += 1;
     }
 
+    // Check if we have any characters left
     if *pointer >= l {
         return Err(format!("Missing {arg_name}"));
     }
 
+    // Check for quote delimiters (single or double quotes)
     let delimiter = match chars[*pointer] {
         c @ ('"' | '\'') => {
-            *pointer += 1;
+            *pointer += 1; // Skip opening quote
             Some(c)
         }
         _ => None,
     };
 
     let mut arg_chars = Vec::new();
+
+    // FIX: Handle escaped quote characters
     if let Some(delim) = delimiter {
+        // Handle quoted string - read until matching quote
         while *pointer < l && chars[*pointer] != delim {
             arg_chars.push(chars[*pointer]);
             *pointer += 1;
         }
 
+        // Check for closing quote
         if *pointer < l && chars[*pointer] == delim {
-            *pointer += 1;
+            *pointer += 1; // Skip closing quote
         } else {
             return Err(format!("Unclosed quote for {arg_name}"));
         }
     } else {
+        // Handle unquoted string - read until whitespace or delimiter
         if *pointer >= l {
             return Err(format!("Missing {arg_name}"));
         }
 
+        // Skip any remaining whitespace
         while *pointer < l && chars[*pointer].is_whitespace() {
             *pointer += 1;
         }
 
+        // Characters that terminate an unquoted argument
         let delimeters = ['[', ']', '{', '}', ','];
+
+        // Read characters until whitespace or delimiter
         while *pointer < l
             && !chars[*pointer].is_whitespace()
             && !delimeters.contains(&chars[*pointer])
@@ -131,25 +164,39 @@ pub fn parse_arg(chars: &[char], pointer: &mut usize, arg_name: &str) -> Result<
             return Err(format!("Missing {arg_name} after whitespace"));
         }
     }
+
     Ok(String::from_iter(arg_chars))
 }
 
+/// Parses a list/array structure from input
+/// Supports both square brackets [item1, item2] and curly braces {item1, item2}
+///
+/// # Arguments
+/// * `chars` - Array of characters representing the input
+/// * `pointer` - Mutable reference to current position in chars
+///
+/// # Returns
+/// * `Ok(Vec<String>)` - Successfully parsed list of items
+/// * `Err(String)` - Parse error with descriptive message
 pub fn parse_list(chars: &[char], pointer: &mut usize) -> Result<Vec<String>, String> {
     let l = chars.len();
     let mut list = Vec::new();
 
+    // Skip leading whitespace
     while *pointer < l && chars[*pointer].is_whitespace() {
         *pointer += 1;
     }
 
-    // LIST {"foo", bar, "baz"}
-    // LIST [foo, "bar", "baz"]
+    // Determine list delimiters - support both [] and {}
+    // Examples: [foo, bar, "baz"] or {foo, bar, "baz"}
     let delimeter = if chars[*pointer] == '[' || chars[*pointer] == '{' {
-        *pointer += 1;
+        *pointer += 1; // Skip opening delimiter
         chars[*pointer - 1]
     } else {
         return Err("Missing list_start delimeter".to_string());
     };
+
+    // Find matching closing delimiter
     let end_delimeter = match delimeter {
         '[' => ']',
         '{' => '}',
@@ -158,24 +205,32 @@ pub fn parse_list(chars: &[char], pointer: &mut usize) -> Result<Vec<String>, St
 
     let separator = ',';
 
+    // Parse list items
     while *pointer < l {
+        // Skip whitespace before item
         while *pointer < l && chars[*pointer].is_whitespace() {
             *pointer += 1;
         }
+
+        // Parse individual list entry
         match parse_arg(chars, pointer, "list_entry") {
             Ok(entry) => list.push(entry),
             Err(e) => return Err(e),
         };
 
+        // Skip whitespace after item
         while *pointer < l && chars[*pointer].is_whitespace() {
             *pointer += 1;
         }
 
+        // Handle comma separator
         if chars[*pointer] == separator {
-            *pointer += 1;
+            *pointer += 1; // Skip comma
         }
 
+        // Check for end of list
         if chars[*pointer] == end_delimeter {
+            *pointer += 1;
             break;
         }
     }
@@ -183,56 +238,82 @@ pub fn parse_list(chars: &[char], pointer: &mut usize) -> Result<Vec<String>, St
     Ok(list)
 }
 
+/// Parses a JSON-like map structure from input
+/// Supports format: {"key1": "value1", "key2": "value2"}
+///
+/// # Arguments
+/// * `data` - Array of characters representing the input
+/// * `pointer` - Mutable reference to current position in chars
+///
+/// # Returns
+/// * `Ok(HashMap<String, String>)` - Successfully parsed key-value map
+/// * `Err(String)` - Parse error with descriptive message
 pub fn parse_map(data: &[char], pointer: &mut usize) -> Result<HashMap<String, String>, String> {
     let left_delim = '{';
     let right_delim = '}';
-
     let mut map: HashMap<String, String> = HashMap::new();
 
+    // Skip leading whitespace
     while *pointer < data.len() && data[*pointer].is_whitespace() {
         *pointer += 1;
     }
 
+    // Check for opening brace
     if *pointer < data.len() && data[*pointer] == left_delim {
-        *pointer += 1;
+        *pointer += 1; // Skip opening brace
     } else {
         return Err("Missing left brace".to_string());
     }
 
+    // Parse key-value pairs until closing brace
     while *pointer < data.len() && data[*pointer] != right_delim {
-        while *pointer < data.len() && data[*pointer].is_whitespace() {
-            *pointer += 1;
-        }
-        let key = parse_arg(data, pointer, "key")?;
+        // Skip whitespace before key
         while *pointer < data.len() && data[*pointer].is_whitespace() {
             *pointer += 1;
         }
 
-        if *pointer < data.len() && data[*pointer] == ':' {
+        // Parse key
+        let key = parse_arg(data, pointer, "key")?;
+
+        // Skip whitespace before colon
+        while *pointer < data.len() && data[*pointer].is_whitespace() {
             *pointer += 1;
+        }
+
+        // Expect colon separator
+        if *pointer < data.len() && data[*pointer] == ':' {
+            *pointer += 1; // Skip colon
         } else {
             return Err("Missing colon separator".to_string());
         }
 
+        // Parse value
         let value = parse_arg(data, pointer, "value")?;
+
+        // Skip whitespace after value
         while *pointer < data.len() && data[*pointer].is_whitespace() {
             *pointer += 1;
         }
 
+        // Store key-value pair
         map.insert(key, value);
 
+        // Handle comma separator (optional for last item)
         if *pointer < data.len() && data[*pointer] == ',' {
-            *pointer += 1;
+            *pointer += 1; // Skip comma
         } else {
-            break;
+            break; // No comma means we're at the end
         }
     }
 
+    // Skip whitespace before closing brace
     while *pointer < data.len() && data[*pointer].is_whitespace() {
         *pointer += 1;
     }
+
+    // Check for closing brace
     if *pointer < data.len() && data[*pointer] == right_delim {
-        *pointer += 1;
+        *pointer += 1; // Skip closing brace
     } else {
         return Err("Missing right brace".to_string());
     }
@@ -240,6 +321,14 @@ pub fn parse_map(data: &[char], pointer: &mut usize) -> Result<HashMap<String, S
     Ok(map)
 }
 
+/// Main parsing function - converts a line of text into a Command
+/// Handles command identification, argument parsing, and error cases
+///
+/// # Arguments
+/// * `line` - String containing the user input command
+///
+/// # Returns
+/// * `Command` - Parsed command or ParseError with details
 pub fn parse_line(line: &str) -> Command {
     let chars: Vec<_> = line.trim().chars().collect();
     let mut pointer = 0;

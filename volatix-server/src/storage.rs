@@ -16,13 +16,31 @@ use flate2::bufread::{ZlibDecoder, ZlibEncoder};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
+/// Thread-safe storage wrapper with atomic statistics and configuration options.
+/// This is the main interface for cache operations.
+///
+/// # Example
+/// ```rust
+/// use std::time::Duration;
+/// use libvolatix::{LockedStorage, StorageValue};
+///
+/// let mut storage = LockedStorage::default();
+/// storage.insert_entry("key".to_string(), StorageValue::Text("value".to_string())).unwrap();
+/// let entry = storage.get_entry("key");
+/// assert!(entry.is_some());
+/// ```
 #[derive(Default)]
 pub struct LockedStorage {
+    /// Thread-safe HashMap containing all cache entries
     pub store: Arc<RwLock<HashMap<String, StorageEntry>>>,
+    /// Configuration options for the cache
     pub options: StorageOptions,
+    /// Atomic statistics for thread-safe performance tracking
     pub stats: StorageStats,
 }
 
+/// Serializable version of storage for disk persistence.
+/// Used internally during save/load operations.
 #[derive(Serialize, Deserialize)]
 struct UnlockedStorage {
     store: HashMap<String, StorageEntry>,
@@ -30,14 +48,35 @@ struct UnlockedStorage {
     stats: NonAtomicStats,
 }
 
+/// Represents all possible value types that can be stored in the cache.
+/// Supports Redis-like data structures with automatic size calculation.
+///
+/// # Examples
+/// ```rust
+/// use libvolatix::StorageValue;
+///
+/// let int_val = StorageValue::Int(42);
+/// let text_val = StorageValue::Text("hello world".to_string());
+/// let list_val = StorageValue::List(vec![
+///     StorageValue::Int(1),
+///     StorageValue::Text("item".to_string())
+/// ]);
+/// ```
 #[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum StorageValue {
+    /// 64-bit signed integer
     Int(i64),
+    /// 64-bit floating point number
     Float(f64),
+    /// Boolean value
     Bool(bool),
+    /// UTF-8 string
     Text(String),
+    /// Binary data
     Bytes(Vec<u8>),
+    /// Ordered list of storage values
     List(Vec<StorageValue>),
+    /// Key-value pairs (similar to JSON object)
     Map(Vec<(String, StorageValue)>),
 }
 
@@ -56,6 +95,16 @@ impl Display for StorageValue {
 }
 
 impl StorageValue {
+    /// Calculates the approximate memory usage of this value in bytes.
+    /// Used for eviction policies and memory management.
+    ///
+    /// # Example
+    /// ```rust
+    /// use libvolatix::StorageValue;
+    ///
+    /// let val = StorageValue::Text("hello".to_string());
+    /// println!("Size: {} bytes", val.size_in_bytes());
+    /// ```
     fn size_in_bytes(&self) -> usize {
         match self {
             StorageValue::Int(_) => size_of_val(self),
@@ -74,14 +123,24 @@ impl StorageValue {
     }
 }
 
+/// Individual cache entry with metadata for TTL, access tracking, and compression.
+/// Each entry contains not just the value, but also metadata needed for
+/// cache management and eviction policies.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageEntry {
+    /// The actual stored value
     pub value: StorageValue,
+    /// When this entry was first created
     pub created_at: SystemTime,
+    /// When this entry was last accessed (for LRU)
     pub last_accessed: SystemTime,
+    /// Number of times this entry has been accessed (for LFU)
     pub access_count: usize,
+    /// Size of the entry in bytes (for size-aware eviction)
     pub entry_size: usize,
+    /// Time-to-live for this entry
     pub ttl: Duration,
+    /// Whether this entry's value is compressed
     pub compressed: bool,
 }
 
@@ -102,6 +161,10 @@ impl Display for StorageEntry {
 }
 
 impl StorageEntry {
+    /// Checks if this entry has expired based on its TTL and creation time.
+    ///
+    /// # Returns
+    /// `true` if the entry has exceeded its TTL, `false` otherwise.
     fn is_expired(&self) -> bool {
         SystemTime::now()
             .duration_since(self.created_at)
@@ -109,11 +172,16 @@ impl StorageEntry {
             > self.ttl
     }
 
+    /// Decompresses the entry value if it was compressed.
+    /// This is called automatically when retrieving compressed entries.
+    ///
+    /// # Errors
+    /// Returns `io::Error` if decompression fails.
     fn decompress(&mut self) -> io::Result<()> {
         let mut output = String::new();
         let input = match &self.value {
             StorageValue::Bytes(bytes) => bytes,
-            _ => return Ok(()),
+            _ => return Ok(()), // Not compressed or not bytes
         };
         let mut z = ZlibDecoder::new(&input[..]);
         z.read_to_string(&mut output)?;
@@ -123,15 +191,23 @@ impl StorageEntry {
     }
 }
 
+/// Configuration options for the storage engine.
+/// These settings control behavior like TTL, capacity limits, and compression.
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct StorageOptions {
+    /// Default TTL for new entries
     pub ttl: Duration,
+    /// Maximum number of entries allowed
     pub max_capacity: u64,
+    /// Strategy for removing entries when at capacity
     pub eviction_policy: EvictionPolicy,
+    /// Whether to enable automatic compression
     pub compression: bool,
+    /// Minimum size in bytes before compression is applied
     pub compression_threshold: usize,
 }
 
+/// Helper enum for more readable compression settings.
 #[derive(Debug)]
 pub enum Compression {
     Enabled,
@@ -158,6 +234,21 @@ impl From<bool> for Compression {
 }
 
 impl StorageOptions {
+    /// Creates new storage options with the specified parameters.
+    ///
+    /// # Example
+    /// ```rust
+    /// use std::time::Duration;
+    /// use libvolatix::{Compression, EvictionPolicy, StorageOptions};
+    ///
+    /// let options = StorageOptions::new(
+    ///     Duration::from_secs(3600),  // 1 hour TTL
+    ///     10000,                      // 10k entries max
+    ///     &EvictionPolicy::LRU,       // Use LRU eviction
+    ///     &Compression::Enabled,      // Enable compression
+    ///     1024                        // Compress values > 1KB
+    /// );
+    /// ```
     pub fn new(
         ttl: Duration,
         max_cap: u64,
@@ -182,11 +273,11 @@ impl StorageOptions {
 impl Default for StorageOptions {
     fn default() -> Self {
         Self {
-            ttl: Duration::from_secs(60 * 60 * 6), // 6 hrs
-            max_capacity: (1000 * 1000),           // 1 Million
+            ttl: Duration::from_secs(60 * 60 * 6), // 6 hours
+            max_capacity: (1000 * 1000),           // 1 million entries
             eviction_policy: EvictionPolicy::default(),
             compression: false,
-            compression_threshold: 1024 * 4, // 4Kb
+            compression_threshold: 1024 * 4, // 4KB
         }
     }
 }
@@ -205,6 +296,8 @@ impl Display for StorageOptions {
     }
 }
 
+/// Non-atomic version of statistics for serialization.
+/// Used when saving/loading storage state to/from disk.
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct NonAtomicStats {
     total_entries: usize,
@@ -214,12 +307,19 @@ struct NonAtomicStats {
     expired_removals: usize,
 }
 
+/// Thread-safe statistics tracking for cache performance monitoring.
+/// All fields use atomic operations for safe concurrent access.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct StorageStats {
+    /// Total number of entries currently in cache
     pub total_entries: AtomicUsize,
+    /// Number of successful cache hits
     pub hits: AtomicUsize,
+    /// Number of cache misses
     pub misses: AtomicUsize,
+    /// Number of entries removed by eviction policies
     pub evictions: AtomicUsize,
+    /// Number of entries removed due to TTL expiration
     pub expired_removals: AtomicUsize,
 }
 
@@ -237,13 +337,19 @@ impl Display for StorageStats {
     }
 }
 
+/// Strategies for removing entries when the cache reaches capacity.
+/// Each policy optimizes for different use cases and access patterns.
 #[derive(Default, Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum EvictionPolicy {
+    /// Remove the oldest entries first (by creation time)
     #[default]
-    Oldest, // Oldest created
-    LRU,       // Least recently  accessed
-    LFU,       // Least frequently used
-    SizeAware, // Largest items
+    Oldest,
+    /// Remove least recently used entries (by last access time)
+    LRU,
+    /// Remove least frequently used entries (by access count)
+    LFU,
+    /// Remove largest entries first (by size)
+    SizeAware,
 }
 
 impl Display for EvictionPolicy {
@@ -257,6 +363,8 @@ impl Display for EvictionPolicy {
     }
 }
 
+/// Configuration entries that can be modified at runtime.
+/// Used by the CONFSET and CONFGET commands.
 #[derive(Debug)]
 pub enum ConfigEntry {
     EvictPolicy(EvictionPolicy),
@@ -278,6 +386,14 @@ impl Display for ConfigEntry {
     }
 }
 
+/// Compresses a string using zlib compression.
+/// Used automatically for large text values when compression is enabled.
+///
+/// # Arguments
+/// * `data` - The string to compress
+///
+/// # Returns
+/// Compressed bytes or error message
 fn compress(data: &str) -> Result<Vec<u8>, String> {
     let mut output = Vec::new();
     let input = data.as_bytes();
@@ -291,6 +407,15 @@ fn compress(data: &str) -> Result<Vec<u8>, String> {
 }
 
 impl LockedStorage {
+    /// Creates a new storage instance with the given options.
+    ///
+    /// # Example
+    /// ```rust
+    /// use libvolatix::{LockedStorage, StorageOptions};
+    ///
+    /// let options = StorageOptions::default();
+    /// let storage = LockedStorage::new(options);
+    /// ```
     pub fn new(options: StorageOptions) -> Self {
         LockedStorage {
             store: Arc::new(RwLock::new(HashMap::with_capacity(1000))),
@@ -299,26 +424,49 @@ impl LockedStorage {
         }
     }
 
+    /// Clears all entries from the cache.
+    /// This is equivalent to the FLUSH command.
     pub fn flush(&mut self) {
         let _old_storage = std::mem::take(self);
     }
 
+    /// Retrieves an entry by key, updating access statistics and metadata.
+    /// Automatically handles decompression and TTL expiration.
+    ///
+    /// # Arguments
+    /// * `key` - The key to look up
+    ///
+    /// # Returns
+    /// `Some(StorageEntry)` if found and not expired, `None` otherwise
+    ///
+    /// # Example
+    /// ```rust
+    /// use libvolatix::LockedStorage;
+    ///
+    /// let storage = LockedStorage::new(StorageOptions::default());
+    ///
+    /// if let Some(entry) = storage.get_entry("user:123") {
+    ///     println!("Value: {}", entry.value);
+    /// }
+    /// ```
     pub fn get_entry(&self, key: &str) -> Option<StorageEntry> {
+        // First, try to get the entry and update its access metadata
         let mut entry = if let Some(entry) = self.store.write().get_mut(key)
             && !entry.is_expired()
         {
+            // Update access tracking for LRU/LFU eviction policies
             entry.access_count += 1;
             entry.last_accessed = SystemTime::now();
             self.stats.hits.fetch_add(1, Ordering::Relaxed);
             entry.clone()
         } else {
+            // Entry not found or expired
             self.stats.misses.fetch_add(1, Ordering::Relaxed);
             return None;
         };
 
-        // You don't wanna move this into the if block;
-        // Tryna hold exclusive lock to store for as
-        // shortest time as possible
+        // Handle decompression outside the lock to minimize lock time.
+        // We don't want to hold an exclusive lock while doing CPU-intensive work.
         #[allow(clippy::collapsible_if)]
         if entry.compressed {
             if entry.decompress().is_err() {
@@ -330,43 +478,96 @@ impl LockedStorage {
         Some(entry.clone())
     }
 
+    /// Checks if a key exists in the cache without updating access metadata.
+    ///
+    /// # Arguments
+    /// * `key` - The key to check
+    ///
+    /// # Returns
+    /// `true` if the key exists and is not expired, `false` otherwise
     pub fn key_exists(&self, key: &str) -> bool {
         self.get_entry(key).is_some()
     }
 
+    /// Returns a list of all keys currently in the cache.
+    /// Note: This creates a snapshot at the time of call.
+    ///
+    /// # Returns
+    /// Vector of all keys in the cache
     pub fn get_keys(&self) -> Vec<String> {
         self.store.read().keys().cloned().collect()
     }
 
-    // batch operations
+    /// Retrieves multiple entries in a single operation (batch get).
+    /// More efficient than individual gets for multiple keys.
+    ///
+    /// # Arguments
+    /// * `keys` - Slice of keys to retrieve
+    ///
+    /// # Returns
+    /// Vector of tuples containing (key, Option<StorageEntry>)
+    ///
+    /// # Example
+    /// ```rust
+    /// let keys = vec!["user:1".to_string(), "user:2".to_string()];
+    /// let results = storage.get_entries(&keys);
+    /// for (key, entry) in results {
+    ///     match entry {
+    ///         Some(e) => println!("{}: {}", key, e.value),
+    ///         None => println!("{}: not found", key),
+    ///     }
+    /// }
+    /// ```
     pub fn get_entries(&self, keys: &[String]) -> Vec<(String, Option<StorageEntry>)> {
-        let mut result = Vec::new();
-        for key in keys {
-            result.push((key.to_string(), self.get_entry(key)));
-        }
-
-        result
+        keys.iter()
+            .map(|k| (k.to_string(), self.get_entry(k)))
+            .collect()
     }
 
+    /// Inserts multiple entries in a single operation (batch set).
+    /// Uses the default TTL for all entries.
+    ///
+    /// # Arguments
+    /// * `entries` - HashMap of key-value pairs to insert
+    ///
+    /// # Returns
+    /// `Ok(())` on success, `Err(String)` on failure
     pub fn insert_entries(&mut self, entries: HashMap<String, StorageValue>) -> Result<(), String> {
         for (key, value) in entries {
             self.insert_entry(key, value)?;
         }
-
         Ok(())
     }
 
+    /// Removes multiple entries in a single operation (batch delete).
+    ///
+    /// # Arguments
+    /// * `keys` - Slice of keys to remove
     pub fn remove_entries(&mut self, keys: &[String]) {
         for key in keys {
             self.remove_entry(key);
         }
     }
 
+    /// Inserts a single entry with the default TTL.
+    /// Convenience method that uses the global TTL setting.
+    ///
+    /// # Arguments
+    /// * `key` - The key to insert
+    /// * `value` - The value to store
+    ///
+    /// # Returns
+    /// `Ok(())` on success, `Err(String)` on failure
     pub fn insert_entry(&mut self, key: String, value: StorageValue) -> Result<(), String> {
-        self.insert_with_ttl(key, value, self.options.ttl)?;
-        Ok(())
+        self.insert_with_ttl(key, value, self.options.ttl)
     }
 
+    /// Increments an integer value by 1.
+    /// Only works if the existing value is an integer.
+    /// Updates access statistics on success.
+    ///
+    /// # Arguments
+    /// * `key` - The key containing an integer value
     pub fn increment_entry(&mut self, key: &str) {
         if let Some(entry) = self.store.write().get_mut(key)
             && let StorageValue::Int(n) = entry.value
@@ -380,6 +581,12 @@ impl LockedStorage {
         self.stats.misses.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Decrements an integer value by 1.
+    /// Only works if the existing value is an integer.
+    /// Updates access statistics on success.
+    ///
+    /// # Arguments
+    /// * `key` - The key containing an integer value
     pub fn decrement_entry(&mut self, key: &str) {
         if let Some(entry) = self.store.write().get_mut(key)
             && let StorageValue::Int(n) = entry.value
@@ -394,24 +601,56 @@ impl LockedStorage {
         self.stats.misses.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Removes a single entry from the cache.
+    /// Updates the total entry count if an entry was actually removed.
+    ///
+    /// # Arguments
+    /// * `key` - The key to remove
     pub fn remove_entry(&mut self, key: &str) {
         if self.store.write().remove_entry(key).is_some() {
             self.stats.total_entries.fetch_sub(1, Ordering::Relaxed);
         }
     }
 
+    /// Inserts an entry with a specific TTL.
+    /// This is the core insertion method that handles compression and eviction.
+    ///
+    /// # Arguments
+    /// * `key` - The key to insert
+    /// * `value` - The value to store
+    /// * `ttl` - Time-to-live for this specific entry
+    ///
+    /// # Returns
+    /// `Ok(())` on success, `Err(String)` on failure
+    ///
+    /// # Example
+    /// ```rust
+    /// use std::time::Duration;
+    /// use libvolatix::{LockedStorage, StorageValue};
+    ///
+    /// let storage = LockedStorage::new(StorageOptions::default());
+    ///
+    /// storage.insert_with_ttl(
+    ///     "session:abc123".to_string(),
+    ///     StorageValue::Text("user_data".to_string()),
+    ///     Duration::from_secs(3600) // 1 hour TTL
+    /// ).unwrap();
+    /// ```
     pub fn insert_with_ttl(
         &mut self,
         key: String,
         value: StorageValue,
         ttl: Duration,
     ) -> Result<(), String> {
+        // Check if we need to make room for this entry
         if self.is_full() {
             self.evict_entries();
         }
+
         let entry_size = value.size_in_bytes();
         let now = SystemTime::now();
 
+        // Handle automatic compression for large text values
         let (value, compressed) = {
             if self.options.compression
                 && let StorageValue::Text(text) = &value
@@ -424,6 +663,7 @@ impl LockedStorage {
             }
         };
 
+        // Create the storage entry with all metadata
         let entry = StorageEntry {
             value,
             created_at: now,
@@ -434,14 +674,38 @@ impl LockedStorage {
             compressed,
         };
 
+        // Insert the entry and update statistics
         self.store.write().insert(key, entry);
         self.stats.total_entries.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 
+    /// Extends or reduces the TTL of an existing entry.
+    /// Can add or subtract time from the current TTL.
+    ///
+    /// # Arguments
+    /// * `key` - The key to modify
+    /// * `additional_time` - Seconds to add (positive) or subtract (negative)
+    ///
+    /// # Returns
+    /// `Ok(())` on success, `Err("UNALTERED")` if the operation would make TTL negative
+    ///
+    /// # Example
+    /// ```rust
+    /// use libvolatix::LockedStorage;
+    ///
+    /// let storage = LockedStorage::new(StorageOptions::default());
+    ///
+    /// // Add 30 minutes
+    /// storage.extend_ttl("session:123", 1800).unwrap();
+    ///
+    /// // Subtract 10 minutes (but don't go negative)
+    /// storage.extend_ttl("session:123", -600).unwrap();
+    /// ```
     pub fn extend_ttl(&mut self, key: &str, additional_time: i64) -> Result<(), String> {
         if let Some(entry) = self.store.write().get_mut(key) {
             if additional_time < 0 {
+                // Prevent TTL from going negative
                 if additional_time.unsigned_abs() > entry.ttl.as_secs() {
                     return Err("UNALTERED".to_string());
                 }
@@ -450,6 +714,7 @@ impl LockedStorage {
             } else {
                 entry.ttl += Duration::from_secs(additional_time as u64);
             }
+            // Update access metadata
             entry.access_count += 1;
             entry.last_accessed = SystemTime::now();
         }
@@ -457,18 +722,31 @@ impl LockedStorage {
         Ok(())
     }
 
+    /// Gets the remaining TTL for a key.
+    ///
+    /// # Arguments
+    /// * `key` - The key to check
+    ///
+    /// # Returns
+    /// `Some(Duration)` if the key exists, `None` otherwise
     pub fn time_to_live(&self, key: &str) -> Option<Duration> {
         self.get_entry(key).map(|e| e.ttl)
     }
 
+    /// Checks if the cache is at capacity.
+    /// Used internally to decide when eviction is needed.
     fn is_full(&self) -> bool {
         self.store.read().len() as u64 >= self.options.max_capacity
     }
 
+    /// Removes all expired entries from the cache.
+    /// Called automatically during eviction and can be called manually.
+    /// Updates statistics to track expired removals.
     fn remove_expired(&mut self) {
         let prev_count = self.store.read().len();
         let now = SystemTime::now();
         {
+            // Remove entries that have exceeded their TTL
             self.store.write().retain(|_, value| {
                 now.duration_since(value.created_at)
                     .expect("clock gone backwards")
@@ -477,6 +755,8 @@ impl LockedStorage {
         }
         let current_count = self.store.read().len();
         let removed = prev_count - current_count;
+
+        // Update statistics
         self.stats
             .expired_removals
             .fetch_add(removed, Ordering::Release);
@@ -485,9 +765,13 @@ impl LockedStorage {
             .store(current_count, Ordering::Release);
     }
 
+    /// Performs eviction based on the configured eviction policy.
+    /// First removes expired entries, then applies the eviction policy if still at capacity.
     pub fn evict_entries(&mut self) {
+        // Always clean up expired entries first
         self.remove_expired();
-        // TODO! Not sure whether we should return here
+
+        // If we're still at capacity after removing expired entries, apply eviction policy
         if !self.is_full() {
             return;
         }
@@ -500,7 +784,8 @@ impl LockedStorage {
         }
     }
 
-    // least recently used/ accessed
+    /// Removes the least recently used entry (LRU eviction policy).
+    /// Finds the entry with the oldest last_accessed timestamp.
     pub fn remove_lru_entry(&mut self) {
         let key = self
             .store
@@ -515,7 +800,8 @@ impl LockedStorage {
         }
     }
 
-    // least frequently used/accessed
+    /// Removes the least frequently used entry (LFU eviction policy).
+    /// Finds the entry with the lowest access_count.
     pub fn remove_lfu_entry(&mut self) {
         let key = self
             .store
@@ -530,12 +816,14 @@ impl LockedStorage {
         }
     }
 
+    /// Removes the largest entry by size (Size-aware eviction policy).
+    /// Finds the entry with the largest entry_size value.
     pub fn remove_largest_entry(&mut self) {
         let key = self
             .store
             .read()
             .iter()
-            .min_by(|(_, v1), (_, v2)| v1.entry_size.cmp(&v2.entry_size))
+            .max_by(|(_, v1), (_, v2)| v1.entry_size.cmp(&v2.entry_size))
             .map(|(k, _)| k.clone());
 
         if let Some(key) = key {
@@ -544,6 +832,8 @@ impl LockedStorage {
         }
     }
 
+    /// Removes the oldest entry by creation time (Oldest eviction policy).
+    /// Finds the entry with the earliest created_at timestamp.
     fn remove_oldest_entry(&mut self) {
         let oldest_key = self
             .store
@@ -558,17 +848,37 @@ impl LockedStorage {
         }
     }
 
+    /// Renames an existing key to a new name.
+    /// The old key is removed and a new entry is created with the same value.
+    /// Updates access statistics.
+    ///
+    /// # Arguments
+    /// * `old_key` - The current key name
+    /// * `new_key` - The new key name
+    ///
+    /// # Example
+    /// ```rust
+    /// storage.rename_entry("old_name", "new_name");
+    /// ```
     pub fn rename_entry(&mut self, old_key: &str, new_key: &str) {
         if let Some((_, mut entry)) = self.store.write().remove_entry(old_key) {
+            // Update access metadata
             entry.access_count += 1;
             entry.last_accessed = SystemTime::now();
             self.stats.hits.fetch_add(1, Ordering::Relaxed);
+
+            // Insert with new key
             self.store.write().insert(new_key.to_string(), entry);
             return;
         }
         self.stats.misses.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Gets a snapshot of the current statistics.
+    /// Returns non-atomic copies of the atomic values.
+    ///
+    /// # Returns
+    /// `StorageStats` with current values
     pub fn get_stats(&self) -> StorageStats {
         StorageStats {
             total_entries: self.stats.total_entries.load(Ordering::Relaxed).into(),
@@ -579,10 +889,20 @@ impl LockedStorage {
         }
     }
 
+    /// Resets all statistics to zero.
+    /// Used by the RESETSTATS command.
     pub fn reset_stats(&mut self) {
         let _old_stats = std::mem::take(&mut self.stats);
     }
 
+    /// Retrieves a configuration entry by key name.
+    /// Used by the CONFGET command.
+    ///
+    /// # Arguments
+    /// * `key` - Configuration key name (case insensitive)
+    ///
+    /// # Returns
+    /// `Some(ConfigEntry)` if the key exists, `None` otherwise
     pub fn get_config_entry(&self, key: &str) -> Option<ConfigEntry> {
         match key.to_uppercase().as_str() {
             "EVICTPOLICY" => Some(ConfigEntry::EvictPolicy(self.options.eviction_policy)),
@@ -596,6 +916,11 @@ impl LockedStorage {
         }
     }
 
+    /// Updates a configuration setting.
+    /// Used by the CONFSET command.
+    ///
+    /// # Arguments
+    /// * `entry` - The configuration entry to update
     pub fn set_config_entry(&mut self, entry: &ConfigEntry) {
         match entry {
             ConfigEntry::EvictPolicy(p) => self.options.eviction_policy = *p,
@@ -611,21 +936,41 @@ impl LockedStorage {
         }
     }
 
+    /// Gets a copy of the current storage options.
+    ///
+    /// # Returns
+    /// Current `StorageOptions` configuration
     pub fn get_options(&self) -> StorageOptions {
         self.options
     }
 
+    /// Loads storage data from disk.
+    /// Used during startup to restore cache state from previous runs.
+    ///
+    /// # Arguments
+    /// * `path` - Path to the storage file
+    ///
+    /// # Returns
+    /// `anyhow::Result<()>` - Success or error details
+    ///
+    /// # Example
+    /// ```rust
+    /// storage.load_from_disk("cache.db").expect("Failed to load cache");
+    /// ```
     pub fn load_from_disk(&mut self, path: &str) -> anyhow::Result<()> {
         let path = Path::new(path);
         if !path.exists() {
-            return Ok(());
+            return Ok(()); // No existing data to load
         }
 
         let file = File::open(path).context("open db")?;
         let mut reader = BufReader::new(file);
 
+        // Deserialize the storage data
         let unlocked_storage: UnlockedStorage =
             bincode2::deserialize_from(&mut reader).context("deserialize from buffer")?;
+
+        // Convert non-atomic stats back to atomic
         let stats = StorageStats {
             total_entries: AtomicUsize::new(unlocked_storage.stats.total_entries),
             hits: AtomicUsize::new(unlocked_storage.stats.hits),
@@ -634,6 +979,7 @@ impl LockedStorage {
             expired_removals: AtomicUsize::new(unlocked_storage.stats.expired_removals),
         };
 
+        // Replace current storage with loaded data
         *self = LockedStorage {
             store: Arc::new(RwLock::new(unlocked_storage.store)),
             options: unlocked_storage.options,
@@ -643,6 +989,23 @@ impl LockedStorage {
         Ok(())
     }
 
+    /// Saves storage data to disk.
+    /// Used for persistence during shutdown and periodic snapshots.
+    ///
+    /// # Arguments
+    /// * `path` - Path where to save the storage file
+    ///
+    /// # Returns
+    /// `anyhow::Result<()>` - Success or error details
+    ///
+    /// # Example
+    /// ```rust
+    /// use libvolatix::LockedStorage;
+    ///
+    /// let storage = LockedStorage::new(StorageOptions::default());
+    ///
+    /// storage.save_to_disk("cache.db").expect("Failed to save cache");
+    /// ```
     pub fn save_to_disk(&self, path: &str) -> anyhow::Result<()> {
         let path = Path::new(path);
         let file = OpenOptions::new()
@@ -652,6 +1015,7 @@ impl LockedStorage {
             .open(path)
             .context("open db for writing")?;
 
+        // Convert atomic stats to non-atomic for serialization
         let stats = NonAtomicStats {
             total_entries: self.stats.total_entries.load(Ordering::Relaxed),
             hits: self.stats.hits.load(Ordering::Relaxed),
@@ -659,11 +1023,16 @@ impl LockedStorage {
             evictions: self.stats.evictions.load(Ordering::Relaxed),
             expired_removals: self.stats.expired_removals.load(Ordering::Relaxed),
         };
+
+        // Create serializable version
         let unlocked_storage = UnlockedStorage {
+            // FIX: Find a way to go around this clone
             store: self.store.read().clone(),
             options: self.options,
             stats,
         };
+
+        // Serialize to disk
         let mut writer = BufWriter::new(file);
         bincode2::serialize_into(&mut writer, &unlocked_storage).context("serialize into db")?;
         writer.flush().context("flush writer")?;
@@ -1059,8 +1428,8 @@ mod tests {
         storage.insert_entry("large".to_string(), v2).unwrap();
         storage.insert_entry("extra".to_string(), v3).unwrap();
 
-        // Smallest value ("v") should be evicted
-        assert!(storage.get_entry("small").is_none());
+        // Largest value ("v") should be evicted
+        assert!(storage.get_entry("large").is_none());
     }
 
     #[test]

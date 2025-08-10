@@ -95,7 +95,6 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // TODO: Figure this out
     println!("Saving data to disk...");
     storage.read().save_to_disk(persistent_path)?;
     println!("Data saved successfully.");
