@@ -19,6 +19,6 @@ name = "server"
 path = "src/main.rs"
 
 [lib]
-name = "server_lib"
+name = "libvolatix"
 path = "src/lib.rs"
 

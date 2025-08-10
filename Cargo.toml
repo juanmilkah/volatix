@@ -8,19 +8,19 @@ authors = ["Juan Milkah <juanmilkah@gmail.com>"]
 license = "MIT"
 
 [workspace]
-members = ["server", "cli", "volatix-bench"]
+members = ["volatix-server", "volatix-cli", "volatix-bench"]
 
 [[bin]]
-name = "server"
-path = "server/src/main.rs"
+name = "volatix-server"
+path = "volatix-server/src/main.rs"
 
 [[bin]]
-name ="cli"
-path = "cli/src/main.rs"
+name ="volatix-cli"
+path = "volatix-cli/src/main.rs"
 
 [lib]
-name = "server_lib"
-path = "server/src/lib.rs"
+name = "libvolatix"
+path = "volatix-server/src/lib.rs"
 
 [[bin]]
 name = "volatix-bench"

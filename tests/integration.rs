@@ -5,7 +5,7 @@ mod integration {
         net::{SocketAddr, TcpStream},
     };
 
-    use server_lib::{RequestType, bulk_string_response, parse_request};
+    use libvolatix::{RequestType, bulk_string_response, parse_request};
     const BUFFER_SIZE: usize = 1024;
 
     macro_rules! bstring {

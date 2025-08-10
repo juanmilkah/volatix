@@ -5,7 +5,7 @@ use std::{
 };
 
 use clap::Parser;
-use server_lib::{LockedStorage, StorageOptions, parse_request, process_request};
+use libvolatix::{LockedStorage, StorageOptions, parse_request, process_request};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const DEFAULT_PORT: u16 = 7878;

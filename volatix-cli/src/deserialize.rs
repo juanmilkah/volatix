@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use server_lib::{RequestType, parse_request};
+use libvolatix::{RequestType, parse_request};
 
 #[derive(Debug)]
 pub enum Response {
