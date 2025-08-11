@@ -107,9 +107,7 @@ fn main() -> Result<(), String> {
     let mut stdout = stdout();
 
     // Perform handshake before entering REPL loop
-    if let Err(e) = handshake(&stream) {
-        return Err(e);
-    }
+    handshake(&stream)?;
 
     // Main REPL (Read-Eval-Print Loop)
     // BUG: Implement history
