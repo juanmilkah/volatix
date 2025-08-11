@@ -5,7 +5,7 @@ use std::{
 };
 
 use clap::Parser;
-use libvolatix::{LockedStorage, StorageOptions, parse_request, process_request};
+use libvolatix::{LockedStorage, StorageOptions, ascii_art, parse_request, process_request};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const DEFAULT_PORT: u16 = 7878;
@@ -50,6 +50,8 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    println!("{art}", art = ascii_art());
+
     let args = Cli::parse();
     let port: u16 = args.port.unwrap_or(DEFAULT_PORT);
 

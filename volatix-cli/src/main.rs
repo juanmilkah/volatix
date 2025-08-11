@@ -7,6 +7,7 @@ use std::io::{Read, Write, stdin, stdout};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream};
 
 use deserialize::{Response, deserialize_response};
+use libvolatix::ascii_art;
 use parse::{Command, parse_line};
 use serialize::serialize_request;
 use usage::help;
@@ -95,7 +96,7 @@ fn main() -> Result<(), String> {
     };
 
     // Display welcome message and usage hints
-    println!("volatix cli repl");
+    println!("{art}", art = ascii_art());
     println!("If stuck try `HELP`");
     println!("To end session `QUIT` or `EXIT`");
     println!("lowercase is fine too :)");
