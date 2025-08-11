@@ -97,14 +97,6 @@ impl Display for StorageValue {
 impl StorageValue {
     /// Calculates the approximate memory usage of this value in bytes.
     /// Used for eviction policies and memory management.
-    ///
-    /// # Example
-    /// ```rust
-    /// use libvolatix::StorageValue;
-    ///
-    /// let val = StorageValue::Text("hello".to_string());
-    /// println!("Size: {} bytes", val.size_in_bytes());
-    /// ```
     fn size_in_bytes(&self) -> usize {
         match self {
             StorageValue::Int(_) => size_of_val(self),
@@ -441,7 +433,7 @@ impl LockedStorage {
     ///
     /// # Example
     /// ```rust
-    /// use libvolatix::LockedStorage;
+    /// use libvolatix::{LockedStorage, StorageOptions};
     ///
     /// let storage = LockedStorage::new(StorageOptions::default());
     ///
@@ -509,6 +501,10 @@ impl LockedStorage {
     ///
     /// # Example
     /// ```rust
+    /// use libvolatix::{LockedStorage, StorageOptions};
+    ///
+    /// let storage = LockedStorage::new(StorageOptions::default());
+    ///
     /// let keys = vec!["user:1".to_string(), "user:2".to_string()];
     /// let results = storage.get_entries(&keys);
     /// for (key, entry) in results {
@@ -626,9 +622,9 @@ impl LockedStorage {
     /// # Example
     /// ```rust
     /// use std::time::Duration;
-    /// use libvolatix::{LockedStorage, StorageValue};
+    /// use libvolatix::{LockedStorage, StorageValue, StorageOptions};
     ///
-    /// let storage = LockedStorage::new(StorageOptions::default());
+    /// let mut storage = LockedStorage::new(StorageOptions::default());
     ///
     /// storage.insert_with_ttl(
     ///     "session:abc123".to_string(),
@@ -692,9 +688,9 @@ impl LockedStorage {
     ///
     /// # Example
     /// ```rust
-    /// use libvolatix::LockedStorage;
+    /// use libvolatix::{LockedStorage, StorageOptions};
     ///
-    /// let storage = LockedStorage::new(StorageOptions::default());
+    /// let mut storage = LockedStorage::new(StorageOptions::default());
     ///
     /// // Add 30 minutes
     /// storage.extend_ttl("session:123", 1800).unwrap();
@@ -858,6 +854,9 @@ impl LockedStorage {
     ///
     /// # Example
     /// ```rust
+    /// use libvolatix::{StorageOptions, LockedStorage};
+    ///
+    /// let mut storage = LockedStorage::new(StorageOptions::default());
     /// storage.rename_entry("old_name", "new_name");
     /// ```
     pub fn rename_entry(&mut self, old_key: &str, new_key: &str) {
@@ -955,6 +954,10 @@ impl LockedStorage {
     ///
     /// # Example
     /// ```rust
+    /// use libvolatix::{StorageOptions, LockedStorage};
+    ///
+    /// let mut storage = LockedStorage::new(StorageOptions::default());
+    ///
     /// storage.load_from_disk("cache.db").expect("Failed to load cache");
     /// ```
     pub fn load_from_disk(&mut self, path: &str) -> anyhow::Result<()> {
@@ -1000,7 +1003,7 @@ impl LockedStorage {
     ///
     /// # Example
     /// ```rust
-    /// use libvolatix::LockedStorage;
+    /// use libvolatix::{LockedStorage, StorageOptions};
     ///
     /// let storage = LockedStorage::new(StorageOptions::default());
     ///

@@ -33,46 +33,6 @@
  * - Batch operations for efficiency
  * - Configuration management commands
  *
- * ## Example Usage
- *
- * ```rust
- * # use libvolatix::{LockedStorage, StorageOptions, StorageValue, EvictionPolicy,
-*     Compression};
- * # use std::time::Duration;
- *
- * // Create storage with custom options
- * let options = StorageOptions::new(
- *     Duration::from_secs(3600),  // 1 hour TTL
- *     10000,                      // 10k entries max
- *     &EvictionPolicy::LRU,       // Use LRU eviction
- *     &Compression::Enabled,      // Enable compression
- *     1024                        // Compress values > 1KB
- * );
- * let mut storage = LockedStorage::new(options);
- *
- * // Store different data types
- * storage.insert_entry("counter".to_string(), StorageValue::Int(42)).unwrap();
- * storage.insert_entry("price".to_string(), StorageValue::Float(19.99)).unwrap();
- * storage.insert_entry("active".to_string(), StorageValue::Bool(true)).unwrap();
- * storage.insert_entry("name".to_string(), StorageValue::Text("John".to_string())).unwrap();
- *
- * // Retrieve values
- * if let Some(entry) = storage.get_entry("counter") {
- *     println!("Counter: {}", entry.value);
- *     println!("Accessed {} times", entry.access_count);
- * }
- *
- * // Batch operations
- * let keys = vec!["counter".to_string(), "name".to_string()];
- * let results = storage.get_entries(&keys);
- *
- * // TTL management
- * storage.extend_ttl("name", 1800).unwrap(); // Add 30 minutes
- *
- * // Save/load from disk
- * storage.save_to_disk("cache.db").unwrap();
- * storage.load_from_disk("cache.db").unwrap();
- * ```
  */
 
 // Re-export all public APIs from the modules

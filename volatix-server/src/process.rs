@@ -8,13 +8,6 @@ use crate::{
     storage::{Compression, ConfigEntry, EvictionPolicy, LockedStorage, StorageValue},
 };
 
-/// ```rust
-/// use libvolatix::RequestType;
-///
-/// let req = RequestType::BulkString { data: b"hello".to_vec() };
-/// let storage_val = request_type_to_storage_value(&req)?;
-/// assert_eq!(storage_val, StorageValue::Text("hello".to_string()));
-/// ```
 fn request_type_to_storage_value(req: &RequestType) -> Result<StorageValue, String> {
     match req {
         // All string-like types are converted to StorageValue::Text
@@ -131,16 +124,6 @@ pub enum Command {
 ///
 /// # Returns
 /// The most appropriate `StorageValue` type for the string
-///
-/// # Example
-/// ```rust
-/// use libvolatix::StorageValue;
-///
-/// assert_eq!(get_value_type("42"), StorageValue::Int(42));
-/// assert_eq!(get_value_type("3.14"), StorageValue::Float(3.14));
-/// assert_eq!(get_value_type("true"), StorageValue::Bool(true));
-/// assert_eq!(get_value_type("hello"), StorageValue::Text("hello".to_string()));
-/// ```
 fn get_value_type(value: &str) -> StorageValue {
     // Try parsing as integer first (most common)
     if let Ok(n) = value.parse::<i64>() {
