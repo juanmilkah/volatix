@@ -30,6 +30,7 @@ path = "volatix-bench/src/main.rs"
 anyhow = "1.0.98"
 bincode2 = "2.0.1"
 clap = { version = "4.5.43", features = ["derive"] }
+crossterm = "0.29.0"
 ctrlc = "3.4.7"
 flate2 = "1.1.2"
 parking_lot = "0.12.4"
@@ -41,6 +42,7 @@ tokio = { version = "1.47.1", features = ["full"] }
 anyhow = {workspace = true}
 bincode2 = {workspace = true}
 clap = {workspace = true}
+crossterm = {workspace = true}
 ctrlc = {workspace = true}
 flate2 = {workspace = true}
 parking_lot = {workspace = true}

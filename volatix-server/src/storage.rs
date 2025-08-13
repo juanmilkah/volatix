@@ -64,6 +64,8 @@ struct UnlockedStorage {
 /// ```
 #[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum StorageValue {
+    /// A Null value
+    Null,
     /// 64-bit signed integer
     Int(i64),
     /// 64-bit floating point number
@@ -90,6 +92,7 @@ impl Display for StorageValue {
             StorageValue::Bytes(b) => write!(f, "{b:?}"),
             StorageValue::List(storage_values) => write!(f, "{storage_values:?}"),
             StorageValue::Map(items) => write!(f, "{items:?}"),
+            StorageValue::Null => write!(f, "null"),
         }
     }
 }
@@ -111,6 +114,7 @@ impl StorageValue {
                 .iter()
                 .map(|(k, v)| k.capacity() + v.size_in_bytes())
                 .sum(),
+            StorageValue::Null => 0,
         }
     }
 }
@@ -140,7 +144,7 @@ impl Display for StorageEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Value: {}, Created_at: {:?}, Last accessed: {:?}, Access Count: {}, Entry size: {}, Ttl: {}, Compressed: {}",
+            "Value: {}\n Created_at: {:?}\n Last accessed: {:?}\n Access Count: {}\n Entry size: {}\n Ttl: {}\n Compressed: {}",
             self.value,
             self.created_at,
             self.last_accessed,

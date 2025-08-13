@@ -13,7 +13,6 @@ parking_lot = {workspace =true}
 serde = { workspace = true}
 tokio = {workspace = true}
 
-
 [[bin]]
 name = "server"
 path = "src/main.rs"

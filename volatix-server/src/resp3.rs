@@ -90,6 +90,8 @@ fn storage_value_to_string(value: &StorageValue) -> String {
 
             v
         }
+        StorageValue::Null => "_\r\n".to_string(),
+
         StorageValue::List(storage_values) => {
             let mut outer = String::new();
             outer.push('*');

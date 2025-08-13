@@ -21,8 +21,7 @@ fn request_type_to_storage_value(req: &RequestType) -> Result<StorageValue, Stri
             Ok(StorageValue::Text(text))
         }
 
-        // FIX: Introduce null storage values data type
-        RequestType::Null => Ok(StorageValue::Text(String::new())),
+        RequestType::Null => Ok(StorageValue::Null),
 
         // Parse integer values
         RequestType::Integer { data } => {
@@ -377,6 +376,7 @@ fn handle_get_command(
             let key = String::from_utf8_lossy(data).to_string();
             let entry = storage.read().get_entry(&key);
 
+            // respond with the entry's `value` field
             match entry {
                 Some(e) => bulk_string_response(Some(&e.value.to_string())),
                 None => null_response(),
