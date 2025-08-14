@@ -144,7 +144,7 @@ impl Display for StorageEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Value: {}\n Created_at: {:?}\n Last accessed: {:?}\n Access Count: {}\n Entry size: {}\n Ttl: {}\n Compressed: {}",
+            "Value:{}\r\nCreated_at:{:?}\r\nLastaccessed:{:?}\r\nAccessCount:{}\r\nEntrysize:{}\r\nTtl:{}\r\nCompressed:{}",
             self.value,
             self.created_at,
             self.last_accessed,

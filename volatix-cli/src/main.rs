@@ -337,24 +337,25 @@ fn read_line(prompt: &str, history: &mut History) -> Result<String, String> {
     }
 }
 
+fn connect_server(addr: SocketAddr) -> Result<TcpStream, String> {
+    // Attempt to establish TCP connection to Volatix server
+    let stream = match TcpStream::connect(addr) {
+        Ok(s) => s,
+        Err(e) => return Err(e.to_string()),
+    };
+
+    // Perform handshake before entering REPL loop
+    handshake(&stream)?;
+
+    Ok(stream)
+}
+
 /// Main application entry point
 /// Establishes connection, runs REPL, and handles user interaction
 fn main() -> Result<(), String> {
     // Define server address (localhost:7878)
     let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 7878));
-
-    // Attempt to establish TCP connection to Volatix server
-    let mut stream = match TcpStream::connect(addr) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("{e}");
-            eprintln!("Failed to connect to Volatix server! Is it running?");
-            return Ok(()); // Not a fatal error, just exit gracefully
-        }
-    };
-
-    // Perform handshake before entering REPL loop
-    handshake(&stream)?;
+    let mut stream = connect_server(addr)?;
 
     // Display welcome message and usage hints
     println!("{art}", art = ascii_art());
@@ -403,18 +404,49 @@ fn main() -> Result<(), String> {
         // Parse user input into a Command object
         let command = parse_line(line);
         match command {
-            // Handle help command locally (no server communication needed)
             Command::Help => {
                 help();
                 continue;
             }
-            // Display parse errors to user
             Command::ParseError(err) => {
                 eprintln!("ERROR: {err}");
                 // Put previous line onto stdout to allow for corrections
                 continue;
             }
-            // For all other commands, serialize and send to server
+
+            Command::Reconnect => {
+                println!("Reconnecting...\r");
+
+                // Close current connection
+                drop(stream);
+
+                // Try to reconnect with retries
+                let mut attempts = 0;
+                const MAX_ATTEMPTS: u32 = 3;
+
+                loop {
+                    attempts += 1;
+                    match connect_server(addr) {
+                        Ok(new_stream) => {
+                            stream = new_stream;
+                            println!("Successfully reconnected");
+                            break;
+                        }
+                        Err(e) => {
+                            eprintln!("Reconnection attempt {attempts} failed: {e}\r");
+                            if attempts >= MAX_ATTEMPTS {
+                                eprintln!(
+                                    "Could not reconnect after {MAX_ATTEMPTS} attempts. Exiting...\r"
+                                );
+                                return Err("Failed to reconnect".to_string());
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(1000));
+                        }
+                    }
+                }
+                continue;
+            }
+
             _ => {
                 let req = serialize_request(&command);
 
@@ -426,7 +458,7 @@ fn main() -> Result<(), String> {
 
                 // Send serialized command to server
                 if stream.write_all(&req).is_err() {
-                    eprintln!("Failed writing to tcp stream");
+                    eprintln!("Failed writing to tcp stream\r");
                     continue;
                 }
             }
@@ -436,7 +468,7 @@ fn main() -> Result<(), String> {
         let read = match stream.read(&mut buffer) {
             Ok(n) => n,
             Err(e) => {
-                eprintln!("{e}");
+                eprintln!("{e}\r");
                 continue;
             }
         };
@@ -448,14 +480,14 @@ fn main() -> Result<(), String> {
 
         // Display formatted response to user
         match resp {
-            Response::SimpleString { data } => println!("{data}"),
-            Response::SimpleError { data } => println!("{data}"),
-            Response::Integer { data } => println!("{data}"),
-            Response::BigNumber { data } => println!("{data}"),
-            Response::Null => println!("NULL"),
-            Response::Boolean { data } => println!("{data}"),
+            Response::SimpleString { data } => println!("{data}\r"),
+            Response::SimpleError { data } => println!("{data}\r"),
+            Response::Integer { data } => println!("{data}\r"),
+            Response::BigNumber { data } => println!("{data}\r"),
+            Response::Null => println!("NULL\r"),
+            Response::Boolean { data } => println!("{data}\r"),
             // Use the formatting function for complex arrays
-            Response::Array { data: _ } => println!("{}", format_response(&resp)),
+            Response::Array { data: _ } => println!("{}\r", format_response(&resp)),
         }
     }
 

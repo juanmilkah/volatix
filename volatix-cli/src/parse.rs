@@ -8,6 +8,7 @@ pub enum Command {
     Hello,              // Initial handshake command
     Help,               // Local help display (not sent to server)
     ParseError(String), // Error in command parsing
+    Reconnect,          // Disconenct and reconnect to the server
 
     // Basic key-value operations
     Get {
@@ -374,6 +375,9 @@ pub fn parse_line(line: &str) -> Command {
         },
 
         "HELP" => Command::Help,
+
+        // Cli-server connection management
+        "RECONNECT" => Command::Reconnect,
 
         // GETLIST ["foo", "bar", "baz"]
         "GETLIST" => match parse_list(&chars, &mut pointer) {

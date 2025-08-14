@@ -1,6 +1,13 @@
 pub fn help() {
     let sections = vec![
         (
+            "Administration",
+            vec![
+                ("RECONNECT", "Disconnect and try to reconnect to the server"),
+                ("HELP", "Display this usage information"),
+            ],
+        ),
+        (
             "Basic Operations",
             vec![
                 (
@@ -71,13 +78,13 @@ pub fn help() {
         ),
     ];
 
-    println!("USAGE:\n");
+    println!("USAGE:\r\n");
 
     for (section, commands) in sections {
-        println!("  {section}:");
+        println!("  {section}:\r");
         for (cmd, desc) in commands {
-            println!("    {:<40} # {}", cmd, desc);
+            println!("    {:<40} # {}\r", cmd, desc);
         }
-        println!();
+        println!("\r");
     }
 }
