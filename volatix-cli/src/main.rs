@@ -15,23 +15,60 @@ use usage::help;
 
 const HISTORY_CAPACITY: usize = 100;
 
+/// A fixed-capacity command history implementation using a circular buffer.
+///
+/// # Structure
+/// The history uses a pre-allocated vector of fixed size (`HISTORY_CAPACITY`)
+/// to efficiently store and navigate through command history without frequent reallocations.
+///
+/// ## Circular Buffer Mechanics
+/// - `commands`: A pre-allocated vector storing commands
+/// - `start`: Index of the oldest command in the buffer
+/// - `len`: Number of commands currently stored
+/// - `current_index`: Tracks the current position when navigating history
 #[derive(Default, Debug)]
 struct History {
+    /// Fixed-size vector to store commands, pre-initialized with empty strings
+    /// This allows constant-time access and prevents repeated memory allocations
     commands: Vec<String>,
-    current_index: Option<usize>,
+
+    /// Tracks the starting index of the oldest command in the circular buffer
+    /// Allows efficient rotation of the buffer without moving elements
     start: usize,
+
+    /// Current number of commands stored in the history
+    /// Always <= HISTORY_CAPACITY
     len: usize,
+
+    /// Tracks the current position when navigating through history
+    /// - `None`: Not navigating, at the end of history
+    /// - `Some(index)`: Currently browsing through past commands
+    current_index: Option<usize>,
 }
 
 impl History {
+    /// Creates a new History instance with pre-allocated command storage
+    ///
+    /// # Behavior
+    /// - Initializes a vector of `HISTORY_CAPACITY` empty strings
+    /// - Sets all other fields to their default values
     fn new() -> Self {
         Self {
+            // Pre-allocate fixed-size vector to avoid dynamic resizing
             commands: vec![String::new(); HISTORY_CAPACITY],
             ..Default::default()
         }
     }
 
+    /// Adds a new command to the history, avoiding duplicates
+    ///
+    /// # Behavior
+    /// - Prevents adding duplicate consecutive commands
+    /// - If history is not full, appends to the end
+    /// - If history is full, overwrites the oldest command
+    /// - Resets current navigation index
     fn push(&mut self, command: String) {
+        // Skip if the command is the same as the last added command
         if self.len > 0 {
             let last_index = (self.start + self.len - 1) % HISTORY_CAPACITY;
             if self.commands[last_index] == command {
@@ -39,54 +76,76 @@ impl History {
             }
         }
 
+        // Two scenarios for adding a command:
         if self.len < HISTORY_CAPACITY {
+            // 1. History is not full: Add to the next available slot
             let index = (self.start + self.len) % HISTORY_CAPACITY;
             self.commands[index] = command;
             self.len += 1;
         } else {
+            // 2. History is full: Overwrite the oldest command and rotate start
             self.commands[self.start] = command;
             self.start = (self.start + 1) % HISTORY_CAPACITY;
         }
 
+        // Reset navigation when a new command is added
         self.current_index = None;
     }
 
+    /// Retrieves the previous command when navigating history
+    ///
+    /// # Navigation Behavior
+    /// - First call: Returns the most recent command
+    /// - Subsequent calls: Moves backwards through history
+    /// - Returns `None` when no more previous commands exist
     fn previous_command(&mut self) -> Option<&String> {
+        // Cannot navigate empty history
         if self.len == 0 {
             return None;
         }
 
         match self.current_index {
+            // First navigation: Start from the most recent command
             None => {
                 self.current_index = Some(self.len - 1);
                 let idx = (self.start + self.len - 1) % HISTORY_CAPACITY;
-                self.commands.get(idx)
+                Some(&self.commands[idx])
             }
+            // Move to previous command if possible
             Some(pos) if pos > 0 => {
                 self.current_index = Some(pos - 1);
-
-                let idx = (self.start + self.len - 1) % HISTORY_CAPACITY;
-                self.commands.get(idx)
+                let idx = (self.start + pos - 1) % HISTORY_CAPACITY;
+                Some(&self.commands[idx])
             }
             // Already at oldest
             Some(_) => None,
         }
     }
 
+    /// Retrieves the next command when navigating forward in history
+    ///
+    /// # Navigation Behavior
+    /// - Returns `None` if not currently navigating history
+    /// - Moves forward through previously retrieved commands
+    /// - Resets navigation when reaching the end of history
     fn next_command(&mut self) -> Option<&String> {
+        // Cannot navigate empty history
         if self.len == 0 {
             return None;
         }
 
         match self.current_index {
+            // Not currently navigating history
             None => None,
-            Some(pos) if pos > 0 => {
-                self.current_index = Some(pos + 1);
 
-                let idx = (self.start + self.len + 1) % HISTORY_CAPACITY;
-                self.commands.get(idx)
+            // Move to next command if within history range
+            Some(pos) if pos < self.len - 1 => {
+                self.current_index = Some(pos + 1);
+                let idx = (self.start + pos + 1) % HISTORY_CAPACITY;
+                Some(&self.commands[idx])
             }
-            // Already at oldest
+
+            // Reached the end of history navigation
             Some(_) => {
                 self.current_index = None;
                 None
@@ -377,10 +436,10 @@ fn main() -> Result<(), String> {
             Ok(line) => line,
             Err(err) => {
                 if err.as_str() == "EXIT" {
-                    println!("Exiting..");
+                    println!("Exiting..\r");
                     break;
                 }
-                eprintln!("{err}");
+                eprintln!("{err}\r");
                 continue;
             }
         };
@@ -409,7 +468,7 @@ fn main() -> Result<(), String> {
                 continue;
             }
             Command::ParseError(err) => {
-                eprintln!("ERROR: {err}");
+                eprintln!("ERROR: {err}\r");
                 // Put previous line onto stdout to allow for corrections
                 continue;
             }
@@ -429,7 +488,7 @@ fn main() -> Result<(), String> {
                     match connect_server(addr) {
                         Ok(new_stream) => {
                             stream = new_stream;
-                            println!("Successfully reconnected");
+                            println!("Successfully reconnected\r");
                             break;
                         }
                         Err(e) => {
@@ -438,7 +497,7 @@ fn main() -> Result<(), String> {
                                 eprintln!(
                                     "Could not reconnect after {MAX_ATTEMPTS} attempts. Exiting...\r"
                                 );
-                                return Err("Failed to reconnect".to_string());
+                                return Err("Failed to reconnect\r".to_string());
                             }
                             std::thread::sleep(std::time::Duration::from_millis(1000));
                         }
@@ -492,4 +551,25 @@ fn main() -> Result<(), String> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod test_history {
+    use crate::History;
+
+    #[test]
+    fn test_history() {
+        let mut history = History::new();
+
+        history.push("git clone".to_string());
+        history.push("cd project".to_string());
+
+        // Navigate backwards
+        assert_eq!(history.previous_command(), Some(&"cd project".to_string()));
+        assert_eq!(history.previous_command(), Some(&"git clone".to_string()));
+        assert_eq!(history.previous_command(), None);
+
+        // Navigate forwards
+        assert_eq!(history.next_command(), Some(&"cd project".to_string()));
+    }
 }

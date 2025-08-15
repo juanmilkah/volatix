@@ -962,7 +962,7 @@ impl LockedStorage {
     ///
     /// let mut storage = LockedStorage::new(StorageOptions::default());
     ///
-    /// storage.load_from_disk("cache.db").expect("Failed to load cache");
+    /// storage.load_from_disk("volatix.db").expect("Failed to load cache");
     /// ```
     pub fn load_from_disk(&mut self, path: &str) -> anyhow::Result<()> {
         let path = Path::new(path);
