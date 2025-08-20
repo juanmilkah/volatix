@@ -31,7 +31,7 @@ cargo run --release --bin volatix-bench \
 ```
 Defaults: 
 - 30 secs duration
-- 0.7 mixed-ratio
+- 0.7 ratio of reads to writes
 - 4 cpu threads
 - Compression disabled
 

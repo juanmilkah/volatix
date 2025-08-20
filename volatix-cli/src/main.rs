@@ -423,7 +423,7 @@ fn main() -> Result<(), String> {
     println!("Press `Esc` to quit");
     println!("Use ↑/↓ arrows for command history");
 
-    let _guard = TerminalGuard::new().map_err(|err| err.to_string());
+    let _guard = TerminalGuard::new().map_err(|err| err.to_string())?;
 
     // Initialize REPL components
     let mut buffer = [0u8; 1024 * 1024]; // 1MB buffer for server responses
