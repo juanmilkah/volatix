@@ -60,6 +60,13 @@ async fn main() -> anyhow::Result<()> {
     println!("Server listening on {addr}");
 
     let options = StorageOptions::default();
+    // let options = StorageOptions::new(
+    //     Duration::from_secs(60),
+    //     10_000,
+    //     &EvictionPolicy::Oldest,
+    //     &Compression::Enabled,
+    //     1024,
+    // );
     let storage = Arc::new(parking_lot::RwLock::new(LockedStorage::new(options)));
     let persistent_path = "volatix.db";
     {

@@ -179,6 +179,7 @@ fn config_entry(key: &str, value: &StorageValue) -> Result<ConfigEntry, String> 
                 }
                 Ok(ConfigEntry::GlobalTtl(*n as u64))
             }
+
             _ => Err("Invalid GLOBALTTL value".to_string()),
         },
 

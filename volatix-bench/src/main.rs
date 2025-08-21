@@ -58,6 +58,8 @@ enum Command {
     Delete { key: String },
     ConfSet { key: String, value: String },
     Flush,
+    DumpStats,
+    EvictEntries,
 }
 
 fn serialize_request(command: &Command) -> Vec<u8> {
@@ -115,6 +117,16 @@ fn serialize_request(command: &Command) -> Vec<u8> {
             let cmd = Bstring::new("FLUSH");
             cmd.0.as_bytes().to_vec()
         }
+
+        Command::DumpStats => {
+            let cmd = Bstring::new("GETSTATS");
+            cmd.0.as_bytes().to_vec()
+        }
+
+        Command::EvictEntries => {
+            let cmd = Bstring::new("EVICTNOW");
+            cmd.0.as_bytes().to_vec()
+        }
     }
 }
 
@@ -150,7 +162,6 @@ struct Config {
     read_latencies: Arc<parking_lot::Mutex<Vec<Duration>>>,
     write_latencies: Arc<parking_lot::Mutex<Vec<Duration>>>,
     mixed_ratio: f64,
-    compress: bool,
 }
 
 fn worker_thread(id: usize, config: &Config) {
@@ -162,18 +173,6 @@ fn worker_thread(id: usize, config: &Config) {
         }
     };
     let mut stream = tcp_stream;
-
-    // setup compression
-    if config.compress {
-        let req = serialize_request(&Command::ConfSet {
-            key: "COMPRESSION".to_string(),
-            value: "ENABLE".to_string(),
-        });
-        stream
-            .write_all(&req)
-            .map_err(|err| eprintln!("Failed to enable compression: {err}"))
-            .unwrap();
-    }
 
     let mut buffer = [0u8; 1024];
     let start_time = Instant::now();
@@ -256,14 +255,30 @@ struct Cli {
         help = "Duration of the benchmark in seconds"
     )]
     duration: Option<u64>,
+
     #[arg(short = 'r', long = "ratio", help = "The ratio of reads to writes")]
     ratio: Option<f64>,
+
     #[arg(
         short = 'w',
         long = "workers",
         help = "Number of worker threads(actual cpu threads)"
     )]
     workers: Option<usize>,
+
+    #[arg(
+        short = 'e',
+        long = "expiration",
+        help = "The global time to live option for storage entries"
+    )]
+    expiration: Option<u64>,
+
+    #[arg(
+        short = 'c',
+        long = "capacity",
+        help = "The maximum number of entries in the storage layer"
+    )]
+    max_capacity: Option<u64>,
 }
 
 fn main() {
@@ -283,6 +298,57 @@ fn main() {
         ((1.0 - mixed_ratio) * 100.0) as u32
     );
     println!();
+
+    let mut tcp_stream = TcpStream::connect(ADDRESS).unwrap();
+    let mut tcp_buffer = [0u8; 1024];
+    // setup compression
+    if compress {
+        let req = serialize_request(&Command::ConfSet {
+            key: "COMPRESSION".to_string(),
+            value: "ENABLE".to_string(),
+        });
+        tcp_stream
+            .write_all(&req)
+            .map_err(|err| eprintln!("Failed to enable compression: {err}"))
+            .unwrap();
+
+        if let Err(err) = tcp_stream.read(&mut tcp_buffer) {
+            eprintln!("Read from tcp_stream: {err}");
+            return;
+        }
+    }
+
+    if let Some(time) = args.expiration {
+        let req = serialize_request(&Command::ConfSet {
+            key: "GLOBALTTL".to_string(),
+            value: time.to_string(),
+        });
+        tcp_stream
+            .write_all(&req)
+            .map_err(|err| format!("Failed to set global_ttl: {err}"))
+            .unwrap();
+
+        if let Err(err) = tcp_stream.read(&mut tcp_buffer) {
+            eprintln!("Read from tcp_stream: {err}");
+            return;
+        }
+    }
+
+    if let Some(cap) = args.max_capacity {
+        let req = serialize_request(&Command::ConfSet {
+            key: "MAXCAP".to_string(),
+            value: cap.to_string(),
+        });
+        tcp_stream
+            .write_all(&req)
+            .map_err(|err| format!("Failed to set max_capacity: {err}"))
+            .unwrap();
+
+        if let Err(err) = tcp_stream.read(&mut tcp_buffer) {
+            eprintln!("Read from tcp_stream: {err}");
+            return;
+        }
+    }
 
     let duration = Duration::from_secs(duration_secs);
     let operation_count = Arc::new(AtomicUsize::new(0));
@@ -307,7 +373,6 @@ fn main() {
             read_latencies: read_lats,
             write_latencies: write_lats,
             mixed_ratio,
-            compress,
         };
 
         let handle = thread::spawn(move || worker_thread(i, &config));
@@ -378,6 +443,7 @@ fn main() {
 
     // Calculate write latency statistics
     let write_lats = write_latencies.lock();
+
     if !write_lats.is_empty() {
         let write_avg =
             write_lats.iter().sum::<Duration>().as_micros() as f64 / write_lats.len() as f64;
@@ -388,8 +454,33 @@ fn main() {
     }
 
     // cleanup
+
+    let cmd = serialize_request(&Command::EvictEntries);
+    if tcp_stream.write_all(&cmd).is_err() {
+        eprintln!("Evict Entries failed!");
+    }
+
+    if let Err(err) = tcp_stream.read(&mut tcp_buffer) {
+        eprintln!("{err}");
+    }
+
+    let cmd = serialize_request(&Command::DumpStats);
+    if tcp_stream.write_all(&cmd).is_err() {
+        eprintln!("Dump Stats failed!");
+    }
+
+    match tcp_stream.read(&mut tcp_buffer) {
+        Ok(0) => {}
+        Ok(n) => {
+            let res = String::from_utf8(tcp_buffer[..n].to_vec()).unwrap_or_default();
+            println!("Stats: \n{res}");
+        }
+        Err(err) => {
+            eprintln!("Error Dumping stats: {err}");
+        }
+    }
+
     let cmd = serialize_request(&Command::Flush);
-    let mut tcp_stream = TcpStream::connect(ADDRESS).unwrap();
     if tcp_stream.write_all(&cmd).is_err() {
         eprintln!("Cleanup failed!");
     }

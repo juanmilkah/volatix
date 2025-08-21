@@ -305,7 +305,7 @@ struct NonAtomicStats {
 
 /// Thread-safe statistics tracking for cache performance monitoring.
 /// All fields use atomic operations for safe concurrent access.
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default)]
 pub struct StorageStats {
     /// Total number of entries currently in cache
     pub total_entries: AtomicUsize,
@@ -447,18 +447,19 @@ impl LockedStorage {
     /// ```
     pub fn get_entry(&self, key: &str) -> Option<StorageEntry> {
         // First, try to get the entry and update its access metadata
-        let mut entry = if let Some(entry) = self.store.write().get_mut(key)
-            && !entry.is_expired()
-        {
-            // Update access tracking for LRU/LFU eviction policies
-            entry.access_count += 1;
-            entry.last_accessed = SystemTime::now();
-            self.stats.hits.fetch_add(1, Ordering::Relaxed);
-            entry.clone()
-        } else {
-            // Entry not found or expired
-            self.stats.misses.fetch_add(1, Ordering::Relaxed);
-            return None;
+        let mut entry = match self.store.write().get_mut(key) {
+            Some(v) if !v.is_expired() => {
+                // Update access tracking for LRU/LFU eviction policies
+                v.access_count += 1;
+                v.last_accessed = SystemTime::now();
+                self.stats.hits.fetch_add(1, Ordering::Relaxed);
+                v.clone()
+            }
+            _ => {
+                // Entry not found or expired
+                self.stats.misses.fetch_add(1, Ordering::Relaxed);
+                return None;
+            }
         };
 
         // Handle decompression outside the lock to minimize lock time.
@@ -466,12 +467,15 @@ impl LockedStorage {
         #[allow(clippy::collapsible_if)]
         if entry.compressed {
             if entry.decompress().is_err() {
-                eprintln!("Entry decompression on get_entry");
+                eprintln!(
+                    "Entry decompression on get_entry\nEntry Key: {key}, Entry Value: {}",
+                    entry.value
+                );
                 return None;
             }
         }
 
-        Some(entry.clone())
+        Some(entry)
     }
 
     /// Checks if a key exists in the cache without updating access metadata.
@@ -759,10 +763,10 @@ impl LockedStorage {
         // Update statistics
         self.stats
             .expired_removals
-            .fetch_add(removed, Ordering::Release);
+            .fetch_add(removed, Ordering::Relaxed);
         self.stats
             .total_entries
-            .store(current_count, Ordering::Release);
+            .store(current_count, Ordering::Relaxed);
     }
 
     /// Performs eviction based on the configured eviction policy.
@@ -1048,7 +1052,7 @@ impl LockedStorage {
 }
 
 #[cfg(test)]
-mod tests {
+mod storage_tests {
     use std::{collections::HashMap, sync::atomic::Ordering, thread, time::Duration};
 
     use super::*;
@@ -1148,6 +1152,8 @@ mod tests {
         assert!(storage.get_entry("key2").is_some());
         assert!(storage.get_entry("key3").is_some());
         assert!(storage.get_entry("key4").is_some());
+
+        assert_eq!(storage.stats.evictions.load(Ordering::Relaxed), 1);
     }
 
     // Test TTL expiration
@@ -1178,6 +1184,9 @@ mod tests {
         // Verify expired key is gone
         assert!(storage.get_entry("key1").is_none());
         assert!(storage.get_entry("key2").is_some());
+
+        storage.remove_expired();
+        assert_eq!(storage.stats.expired_removals.load(Ordering::Relaxed), 1);
     }
 
     // Test the existing remove_expired function directly
