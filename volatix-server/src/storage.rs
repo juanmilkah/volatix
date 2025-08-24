@@ -501,7 +501,7 @@ impl LockedStorage {
     /// * `keys` - Slice of keys to retrieve
     ///
     /// # Returns
-    /// Vector of tuples containing (key, Option<StorageEntry>)
+    /// Vector of tuples containing (key, `Option<StorageEntry>`)
     ///
     /// # Example
     /// ```rust
