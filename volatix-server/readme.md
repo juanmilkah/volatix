@@ -104,9 +104,6 @@ Volatix is a Redis-compatible in-memory cache server built in Rust. It supports 
 - **Memory management**: Configurable capacity limits
 
 ### Eviction Policies
-NOTE: Only a single element is removed from the cache when an eviction is invoked. This
-model relies on marking entries as expired before invoking an eviction command.
-This is subject to change in later implementations to allow for custom eviction counts.
 1. **Oldest**: Remove entries by creation time
 2. **LRU (Least Recently Used)**: Remove least accessed entries
 3. **LFU (Least Frequently Used)**: Remove entries with lowest access count

@@ -83,7 +83,10 @@ pub fn serialize_request(command: &Command) -> Vec<u8> {
     match command {
         Command::Flush => bstring("FLUSH").as_bytes().to_vec(),
 
-        Command::EvictNow => bstring("EVICTNOW").as_bytes().to_vec(),
+        Command::EvictNow { count } => {
+            let v = [bstring("EVICTNOW"), integer(*count as i64)];
+            array(&v).as_bytes().to_vec()
+        }
 
         Command::Hello => bstring("HELLO").as_bytes().to_vec(),
 
@@ -132,22 +135,21 @@ pub fn serialize_request(command: &Command) -> Vec<u8> {
         }
 
         Command::SetMap { map } => {
-            let mut arr_str = String::new();
-            arr_str.push('*');
-            arr_str.push_str(&2.to_string());
-            arr_str.push_str("\r\n");
-            arr_str.push_str(&bstring("SETMAP"));
+            let map = {
+                let mut arr_str = String::new();
+                arr_str.push('%');
+                arr_str.push_str(&map.len().to_string());
+                arr_str.push_str("\r\n");
 
-            arr_str.push('%');
-            arr_str.push_str(&map.len().to_string());
-            arr_str.push_str("\r\n");
+                for (key, value) in map {
+                    arr_str.push_str(&bstring(key));
+                    arr_str.push_str(&bstring(value));
+                }
+                arr_str
+            };
 
-            for (key, value) in map {
-                arr_str.push_str(&bstring(key));
-                arr_str.push_str(&bstring(value));
-            }
-
-            arr_str.as_bytes().to_vec()
+            let v = [bstring("SETMAP"), map];
+            array(&v).as_bytes().to_vec()
         }
 
         Command::GetStats => bstring("GETSTATS").as_bytes().to_vec(),
@@ -165,27 +167,18 @@ pub fn serialize_request(command: &Command) -> Vec<u8> {
         }
 
         Command::SetwTtl { key, value, ttl } => {
-            // Manually encode due to mixed Bulk String + Integer sequence
-            let mut arr = String::new();
-            arr.push('*');
-            arr.push_str(&4.to_string());
-            arr.push_str("\r\n");
-            arr.push_str(&bstring("SETWTTL"));
-            arr.push_str(&bstring(key));
-            arr.push_str(&bstring(value));
-            arr.push_str(&integer(*ttl as i64));
-            arr.as_bytes().to_vec()
+            let v = [
+                bstring("SETWTTL"),
+                bstring(key),
+                bstring(value),
+                integer(*ttl as i64),
+            ];
+            array(&v).as_bytes().to_vec()
         }
 
         Command::Expire { key, addition } => {
-            let mut arr = String::new();
-            arr.push('*');
-            arr.push_str(&3.to_string());
-            arr.push_str("\r\n");
-            arr.push_str(&bstring("EXPIRE"));
-            arr.push_str(&bstring(key));
-            arr.push_str(&integer(*addition));
-            arr.as_bytes().to_vec()
+            let v = [bstring("EXPIRE"), bstring(key), integer(*addition)];
+            array(&v).as_bytes().to_vec()
         }
 
         Command::GetTtl { key } => {

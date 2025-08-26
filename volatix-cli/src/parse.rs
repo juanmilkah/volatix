@@ -76,7 +76,9 @@ pub enum Command {
     GetTtl {
         key: String,
     }, // Get remaining TTL for key
-    EvictNow, // Trigger immediate eviction using policy
+    EvictNow {
+        count: usize,
+    }, // Trigger immediate eviction using policy
 
     // Configuration management
     ConfSet {
@@ -472,7 +474,14 @@ pub fn parse_line(line: &str) -> Command {
 
         "CONFOPTIONS" => Command::ConfOptions,
 
-        "EVICTNOW" => Command::EvictNow,
+        "EVICTNOW" => {
+            // If "count" is missing, use the value 0 instead
+            let val = parse_arg(&chars, &mut pointer, "count").unwrap_or(0.to_string());
+            match val.parse::<usize>() {
+                Ok(val) => Command::EvictNow { count: val },
+                Err(err) => Command::ParseError(err.to_string()),
+            }
+        }
 
         "FLUSH" => Command::Flush,
 

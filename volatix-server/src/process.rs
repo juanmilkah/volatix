@@ -102,11 +102,12 @@ pub enum Command {
     GetTtl,  // Get remaining TTL for a key
 
     // Administrative
-    Dump,   // Get detailed entry information
-    SetMap, // Store multiple key-value pairs (like Redis MSET)
-    Incr,   // Increment an integer value
-    Decr,   // Decrement an integer value
-    Rename, // Rename a key
+    Dump,     // Get detailed entry information
+    SetMap,   // Store multiple key-value pairs (like Redis MSET)
+    Incr,     // Increment an integer value
+    Decr,     // Decrement an integer value
+    Rename,   // Rename a key
+    EvictNow, // Evict entries
 
     Unknown, // Invalid or unsupported command
 }
@@ -272,11 +273,6 @@ pub fn process_request(
                     bulk_string_response(Some("SUCCESS"))
                 }
 
-                "EVICTNOW" => {
-                    storage.write().evict_entries();
-                    bulk_string_response(Some("SUCCESS"))
-                }
-
                 // List all keys in the cache
                 "KEYS" => {
                     let keys = storage.read().get_keys();
@@ -342,6 +338,7 @@ fn get_command(req_type: &RequestType) -> Command {
 
                 // Key management
                 "RENAME" => Command::Rename,
+                "EVICTNOW" => Command::EvictNow,
 
                 _ => Command::Unknown,
             }
@@ -1032,6 +1029,45 @@ fn handle_rename_command(
     }
 }
 
+/// Handles EVICTNOW command: evicts entries based on the current eviction policy
+/// This command has an optional integer value that represents the number of entries
+/// to evict. The fallback value is 0, if the value is not specified.
+/// Format: `EVICTNOW`
+///         `EVICTNOW 10`
+///
+/// # Arguments
+/// * `children` - Command arguments (count). Children can be empty
+/// * `storage` - Storage engine reference
+///
+/// # Returns
+/// RESP3 response: "SUCCESS" (always succeeds)
+///
+fn handle_evictnow_command(
+    children: &[RequestType],
+    storage: Arc<parking_lot::RwLock<LockedStorage>>,
+) -> Vec<u8> {
+    if children.is_empty() {
+        storage.write().evict_entries(0);
+        return bulk_string_response(Some("SUCCESS"));
+    }
+
+    match &children[0] {
+        RequestType::Integer { data } => {
+            let int_str = match String::from_utf8(data.to_vec()) {
+                Ok(s) => s,
+                Err(e) => return bulk_error_response(&e.to_string()),
+            };
+            let int = match int_str.parse::<usize>() {
+                Ok(i) => i,
+                Err(e) => return bulk_error_response(&e.to_string()),
+            };
+            storage.write().evict_entries(int);
+            bulk_string_response(Some("SUCCESS"))
+        }
+        _ => bulk_error_response("Invalid count type for evictnow command"),
+    }
+}
+
 /// Processes array-based commands by routing to appropriate handlers.
 /// This is called for all commands that come as RESP3 arrays.
 ///
@@ -1050,10 +1086,6 @@ fn process_array(
     children: &[RequestType],
     storage: Arc<parking_lot::RwLock<LockedStorage>>,
 ) -> Vec<u8> {
-    if children.is_empty() {
-        return null_response();
-    }
-
     let mut i = 0;
     let command = get_command(&children[i]); // Extract command from first element
     i += 1; // Skip to arguments
@@ -1078,5 +1110,6 @@ fn process_array(
         Command::Incr => handle_incr_command(&children[i..], storage),
         Command::Decr => handle_decr_command(&children[i..], storage),
         Command::Rename => handle_rename_command(&children[i..], storage),
+        Command::EvictNow => handle_evictnow_command(&children[i..], storage),
     }
 }

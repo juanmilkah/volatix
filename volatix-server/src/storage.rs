@@ -421,9 +421,12 @@ impl LockedStorage {
     }
 
     /// Clears all entries from the cache.
-    /// This is equivalent to the FLUSH command.
+    /// Configuration options are retained.
+    /// To reset config options try `reset_options`
     pub fn flush(&mut self) {
+        let old_config = self.options;
         let _old_storage = std::mem::take(self);
+        self.options = old_config;
     }
 
     /// Retrieves an entry by key, updating access statistics and metadata.
@@ -644,7 +647,9 @@ impl LockedStorage {
     ) -> Result<(), String> {
         // Check if we need to make room for this entry
         if self.is_full() {
-            self.evict_entries();
+            // Evict 10% of the entries
+            let n = (10.0 / 100.0 * self.max_capacity() as f64).ceil() as usize;
+            self.evict_entries(n);
         }
 
         let entry_size = value.size_in_bytes();
@@ -739,6 +744,17 @@ impl LockedStorage {
         self.store.read().len() as u64 >= self.options.max_capacity
     }
 
+    /// Checks the current maximum capcity of the storage
+    fn max_capacity(&self) -> u64 {
+        self.options.max_capacity
+    }
+
+    /// Check the total number of entries currently in the store.
+    /// Valid and invalid values inclusive
+    fn entry_count(&self) -> usize {
+        self.store.read().len()
+    }
+
     /// Removes all expired entries from the cache.
     /// Called automatically during eviction and can be called manually.
     /// Updates statistics to track expired removals.
@@ -766,86 +782,101 @@ impl LockedStorage {
     }
 
     /// Performs eviction based on the configured eviction policy.
-    /// First removes expired entries, then applies the eviction policy if still at capacity.
-    pub fn evict_entries(&mut self) {
-        // Always clean up expired entries first
-        self.remove_expired();
-
-        // If we're still at capacity after removing expired entries, apply eviction policy
-        if !self.is_full() {
+    /// First removes expired entries, then applies the eviction policy.
+    /// If the specified count is greater than or equal to the
+    /// `Self::entry_count()` the storage is flushed.
+    /// If count is zero, 10% of total entries is evicted.
+    pub fn evict_entries(&mut self, count: usize) {
+        if count >= self.entry_count() {
+            self.flush();
             return;
         }
 
+        self.remove_expired();
+
+        let count = if count == 0 {
+            (10.0 / 100.0 * self.entry_count() as f64).ceil() as usize
+        } else {
+            count
+        };
+
         match self.options.eviction_policy {
-            EvictionPolicy::Oldest => self.remove_oldest_entry(),
-            EvictionPolicy::LRU => self.remove_lru_entry(),
-            EvictionPolicy::LFU => self.remove_lfu_entry(),
-            EvictionPolicy::SizeAware => self.remove_largest_entry(),
+            EvictionPolicy::Oldest => self.remove_n_oldest_entries(count),
+            EvictionPolicy::LRU => self.remove_n_lru_entries(count),
+            EvictionPolicy::LFU => self.remove_n_lfu_entries(count),
+            EvictionPolicy::SizeAware => self.remove_n_largest_entries(count),
         }
     }
 
-    /// Removes the least recently used entry (LRU eviction policy).
-    /// Finds the entry with the oldest last_accessed timestamp.
-    pub fn remove_lru_entry(&mut self) {
-        let key = self
+    /// Removes the least recently used n entries (LRU eviction policy).
+    pub fn remove_n_lru_entries(&mut self, n: usize) {
+        let mut vals = self
             .store
             .read()
             .iter()
-            .min_by(|(_, v1), (_, v2)| v1.last_accessed.cmp(&v2.last_accessed))
-            .map(|(k, _)| k.clone());
+            .map(|(k, v)| (k.clone(), v.last_accessed))
+            .collect::<Vec<_>>();
 
-        if let Some(key) = key {
-            self.remove_entry(&key);
-            self.stats.evictions.fetch_add(1, Ordering::Relaxed);
-        }
+        // The least recently used has the lowest value
+        vals.sort_by_key(|(_, v)| *v);
+        let mut vals = vals.into_iter().map(|(k, _)| k).collect::<Vec<_>>();
+        vals.truncate(n);
+
+        self.remove_entries(&vals);
+        self.stats.evictions.fetch_add(n, Ordering::Relaxed);
     }
 
-    /// Removes the least frequently used entry (LFU eviction policy).
-    /// Finds the entry with the lowest access_count.
-    pub fn remove_lfu_entry(&mut self) {
-        let key = self
+    /// Removes the least frequently used n entries (LFU eviction policy).
+    pub fn remove_n_lfu_entries(&mut self, n: usize) {
+        let mut vals = self
             .store
             .read()
             .iter()
-            .min_by(|(_, v1), (_, v2)| v1.access_count.cmp(&v2.access_count))
-            .map(|(k, _)| k.clone());
+            .map(|(k, v)| (k.clone(), v.access_count))
+            .collect::<Vec<_>>();
 
-        if let Some(key) = key {
-            self.remove_entry(&key);
-            self.stats.evictions.fetch_add(1, Ordering::Relaxed);
-        }
+        vals.sort_by_key(|(_, v)| *v);
+        let mut vals = vals.into_iter().map(|(k, _)| k).collect::<Vec<_>>();
+        vals.truncate(n);
+
+        self.remove_entries(&vals);
+        self.stats.evictions.fetch_add(n, Ordering::Relaxed);
     }
 
-    /// Removes the largest entry by size (Size-aware eviction policy).
-    /// Finds the entry with the largest entry_size value.
-    pub fn remove_largest_entry(&mut self) {
-        let key = self
+    /// Removes the largest n entries by their size (Size-aware eviction policy).
+    pub fn remove_n_largest_entries(&mut self, n: usize) {
+        let mut vals = self
             .store
             .read()
             .iter()
-            .max_by(|(_, v1), (_, v2)| v1.entry_size.cmp(&v2.entry_size))
-            .map(|(k, _)| k.clone());
+            .map(|(k, v)| (k.clone(), v.entry_size))
+            .collect::<Vec<_>>();
 
-        if let Some(key) = key {
-            self.remove_entry(&key);
-            self.stats.evictions.fetch_add(1, Ordering::Relaxed);
-        }
+        // Sort in reverse order
+        vals.sort_by(|(_, v1), (_, v2)| v2.cmp(v1));
+        let mut vals = vals.into_iter().map(|(k, _)| k).collect::<Vec<_>>();
+        vals.truncate(n);
+
+        self.remove_entries(&vals);
+        self.stats.evictions.fetch_add(n, Ordering::Relaxed);
     }
 
-    /// Removes the oldest entry by creation time (Oldest eviction policy).
-    /// Finds the entry with the earliest created_at timestamp.
-    fn remove_oldest_entry(&mut self) {
-        let oldest_key = self
+    /// Removes the oldest n entries by their creation time (Oldest eviction policy).
+    fn remove_n_oldest_entries(&mut self, n: usize) {
+        let mut vals = self
             .store
             .read()
             .iter()
-            .min_by(|(_k1, v1), (_k2, v2)| v1.created_at.cmp(&v2.created_at))
-            .map(|(k, _v)| k.clone());
+            .map(|(k, v)| (k.clone(), v.created_at))
+            .collect::<Vec<_>>();
 
-        if let Some(key) = oldest_key {
-            self.remove_entry(&key);
-            self.stats.evictions.fetch_add(1, Ordering::Relaxed);
-        }
+        // The oldest element has the least created_at value
+        vals.sort_by_key(|(_, v)| *v);
+        let mut vals = vals.into_iter().map(|(k, _)| k).collect::<Vec<_>>();
+        vals.truncate(n);
+
+        self.remove_entries(&vals);
+        self.stats.evictions.fetch_add(n, Ordering::Relaxed);
     }
 
     /// Renames an existing key to a new name.
@@ -945,6 +976,12 @@ impl LockedStorage {
     /// Current `StorageOptions` configuration
     pub fn get_options(&self) -> StorageOptions {
         self.options
+    }
+
+    /// Resets the current storage options to the default value
+    /// provided by `StorageOptions::default()`
+    pub fn reset_options(&mut self) {
+        std::mem::take(&mut self.options);
     }
 
     /// Loads storage data from disk.

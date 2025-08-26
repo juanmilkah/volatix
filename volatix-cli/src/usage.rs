@@ -73,7 +73,10 @@ pub fn help() {
                 ("SETWTTL <key> <ttl: u64>", "Set key with TTL (in seconds)"),
                 ("EXPIRE <key> <delta: i64>", "Extend or reduce TTL"),
                 ("GETTTL <key>", "Get remaining TTL for key"),
-                ("EVICTNOW <key>", "Trigger eviction using current policy"),
+                (
+                    "EVICTNOW [count]",
+                    "Trigger count or default(10%) evictions using current policy",
+                ),
             ],
         ),
     ];
