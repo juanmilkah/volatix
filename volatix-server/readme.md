@@ -56,7 +56,7 @@ Volatix is a Redis-compatible in-memory cache server built in Rust. It supports 
 │  │  ┌──────────────┐           ┌──────────────────────┐││
 │  │  │    Disk      │           │    Background        │││
 │  │  │  Snapshots   │  <------> │    Snapshots         │││
-│  │  │              │           │    (60s interval)    │││
+│  │  │              │           │    (300s interval)   │││
 │  │  └──────────────┘           └──────────────────────┘││
 │  └─────────────────────────────────────────────────────┘│
 └─────────────────────────────────────────────────────────┘
@@ -104,6 +104,9 @@ Volatix is a Redis-compatible in-memory cache server built in Rust. It supports 
 - **Memory management**: Configurable capacity limits
 
 ### Eviction Policies
+NOTE: Only a single element is removed from the cache when an eviction is invoked. This
+model relies on marking entries as expired before invoking an eviction command.
+This is subject to change in later implementations to allow for custom eviction counts.
 1. **Oldest**: Remove entries by creation time
 2. **LRU (Least Recently Used)**: Remove least accessed entries
 3. **LFU (Least Frequently Used)**: Remove entries with lowest access count
@@ -112,15 +115,16 @@ Volatix is a Redis-compatible in-memory cache server built in Rust. It supports 
 ### Run Server
 ```bash
 # Default port (7878)
-cargo run
+volatix-server
 
 # Custom port
-cargo run -- --port 8080
+volatix-server --port 8080
+
+# Custom snapshot interval time in seconds
+volatix-server --snapshots_interval 400
 ```
 
 ## Usage Examples
-
-### Basic Operations
 
 #### Connect and Test
 ```bash
@@ -182,65 +186,8 @@ HELLO
 *2\r\n$6\r\nSETMAP\r\n%3\r\n$4\r\nname\r\n$4\r\nJohn\r\n$3\r\nage\r\n:25\r\n$4\r\ncity\r\n$7\r\nSeattle\r\n
 ```
 
-### Configuration Management
-
-#### View Current Configuration
-```bash
-*1\r\n$11\r\nCONFOPTIONS\r\n
-# Response shows all configuration settings
-```
-
-#### Modify Settings
-```bash
-# Change eviction policy to LRU
-*3\r\n$7\r\nCONFSET\r\n$11\r\nEVICTPOLICY\r\n$3\r\nLRU\r\n
-
-# Set max capacity to 500,000 entries
-*3\r\n$7\r\nCONFSET\r\n$6\r\nMAXCAP\r\n$6\r\n500000\r\n
-
-# Enable compression
-*3\r\n$7\r\nCONFSET\r\n$11\r\nCOMPRESSION\r\n$6\r\nENABLE\r\n
-```
-
-### System Operations
-
-#### Statistics
-```bash
-# Get performance statistics
-*1\r\n$8\r\nGETSTATS\r\n
-# Response: Total Entries: 1250, Hits: 8934, Misses: 234, Evictions: 12, Expired Removals: 45
-
-# Reset statistics
-*1\r\n$10\r\nRESETSTATS\r\n
-```
-
-#### Administrative Commands
-```bash
-# List all keys
-*1\r\n$4\r\nKEYS\r\n
-
-# Force eviction check
-*1\r\n$8\r\nEVICTNOW\r\n
-
-# Clear all data
-*1\r\n$5\r\nFLUSH\r\n
-```
-
-## Configuration
-
-### Storage Options
-```rust
-StorageOptions {
-    ttl: Duration::from_secs(21600),    // Global TTL (6 hours)
-    max_capacity: 1_000_000,            // Maximum entries
-    eviction_policy: EvictionPolicy::Oldest,
-    compression: false,                  // Compression disabled by default
-    compression_threshold: 4096,         // Compress values > 4KB
-}
-```
-
 ### Runtime Configuration Keys
-- `GLOBALTTL`: Default TTL in seconds
+- `GLOBALTTL`: Default Time To Live in seconds
 - `MAXCAP`: Maximum number of entries
 - `EVICTPOLICY`: `OLDEST`, `LRU`, `LFU`, `SIZEAWARE`
 - `COMPRESSION`: `ENABLE`, `DISABLE`
@@ -250,24 +197,19 @@ StorageOptions {
 
 ### Benchmarks
 - **Memory**: ~100 bytes overhead per entry
-- **Throughput**: 100K+ operations/second (single-threaded)
-- **Latency**: Sub-millisecond for cache hits
+- **Throughput**: 100K+ operations/second
+- **Latency**: Micro seconds for cache hits
 - **Concurrency**: Scales linearly with CPU cores
 
-### Memory Usage
-- Base memory: ~50MB
-- Per entry overhead: ~100 bytes
-- Compression ratio: 60-80% for text data
-
 ### Persistence
-- **Snapshot frequency**: 60 seconds (configurable)
+- **Snapshot frequency**: 300 seconds (configurable)
 - **Serialization format**: Bincode (binary)
 - **Startup time**: <1 second for 1M entries
 
 ## FAQ
 
 **Q: Is this production-ready?**
-A: This is a learning/demonstration project. For production use, consider Redis or KeyDB.
+A: This is a work in-progres project. For production use, consider Redis or KeyDB.
 
 **Q: How does it compare to Redis?**
 A: Volatix focuses on core caching features with modern Rust performance. Redis has a much broader feature set.

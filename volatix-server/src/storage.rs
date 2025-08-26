@@ -3,7 +3,7 @@ use std::{
     fmt::Display,
     fs::{File, OpenOptions},
     io::{self, BufReader, BufWriter, Read, Write},
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -959,12 +959,14 @@ impl LockedStorage {
     /// # Example
     /// ```rust
     /// use libvolatix::{StorageOptions, LockedStorage};
+    /// use std::path::Path;
     ///
     /// let mut storage = LockedStorage::new(StorageOptions::default());
     ///
-    /// storage.load_from_disk("volatix.db").expect("Failed to load cache");
+    /// let db_path = Path::new("volatix.db").to_path_buf();
+    /// storage.load_from_disk(&db_path).expect("Failed to load cache");
     /// ```
-    pub fn load_from_disk(&mut self, path: &str) -> anyhow::Result<()> {
+    pub fn load_from_disk(&mut self, path: &PathBuf) -> anyhow::Result<()> {
         let path = Path::new(path);
         if !path.exists() {
             return Ok(()); // No existing data to load
@@ -1008,12 +1010,14 @@ impl LockedStorage {
     /// # Example
     /// ```rust
     /// use libvolatix::{LockedStorage, StorageOptions};
+    /// use std::path::Path;
     ///
     /// let storage = LockedStorage::new(StorageOptions::default());
     ///
-    /// storage.save_to_disk("cache.db").expect("Failed to save cache");
+    /// let db_path = Path::new("cache.db").to_path_buf();
+    /// storage.save_to_disk(&db_path).expect("Failed to save cache");
     /// ```
-    pub fn save_to_disk(&self, path: &str) -> anyhow::Result<()> {
+    pub fn save_to_disk(&self, path: &PathBuf) -> anyhow::Result<()> {
         let path = Path::new(path);
         let file = OpenOptions::new()
             .write(true)

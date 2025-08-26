@@ -258,33 +258,49 @@ fn get_data_type(byte: u8) -> DataType {
     }
 }
 
-fn parse_simple_strings(data: &[u8]) -> Result<(RequestType, usize), String> {
+fn parse_simple_strings(
+    data: &[u8],
+    byte_offset: &mut usize,
+) -> Result<(RequestType, usize), String> {
     let mut s = Vec::new();
     let mut i = 0;
     while i < data.len() && data[i] != b'\r' {
         s.push(data[i]);
         i += 1;
     }
+    *byte_offset += i;
     if i >= data.len() || i + 1 >= data.len() || data[i] != b'\r' || data[i + 1] != b'\n' {
-        return Err("No proper termination".to_string());
+        return Err(format!(
+            "No proper termination at byte offset: {}",
+            *byte_offset
+        ));
     }
 
     i += 2;
+    *byte_offset += 2;
     Ok((RequestType::SimpleString { data: s }, i))
 }
 
-fn parse_simple_errors(data: &[u8]) -> Result<(RequestType, usize), String> {
+fn parse_simple_errors(
+    data: &[u8],
+    byte_offset: &mut usize,
+) -> Result<(RequestType, usize), String> {
     let mut s = Vec::new();
     let mut i = 0;
     while i < data.len() && data[i] != b'\r' {
         s.push(data[i]);
         i += 1;
     }
+    *byte_offset += i;
     if i >= data.len() || i + 1 >= data.len() || data[i] != b'\r' || data[i + 1] != b'\n' {
-        return Err("No proper termination".to_string());
+        return Err(format!(
+            "No proper termination at byte offset: {}",
+            *byte_offset
+        ));
     }
 
     i += 2;
+    *byte_offset += 2;
     Ok((RequestType::SimpleError { data: s }, i))
 }
 
@@ -294,7 +310,7 @@ fn parse_simple_errors(data: &[u8]) -> Result<(RequestType, usize), String> {
 // An optional plus (+) or minus (-) as the sign.
 // One or more decimal digits (0..9) as the integer's unsigned, base-10 value.
 // The CRLF terminator.
-fn parse_integers(data: &[u8]) -> Result<(RequestType, usize), String> {
+fn parse_integers(data: &[u8], byte_offset: &mut usize) -> Result<(RequestType, usize), String> {
     let mut i = 0;
     let sign = match data[i] {
         b'-' => {
@@ -315,10 +331,15 @@ fn parse_integers(data: &[u8]) -> Result<(RequestType, usize), String> {
     }
 
     if i >= data.len() || i + 1 >= data.len() || data[i] != b'\r' || data[i + 1] != b'\n' {
-        return Err("No proper termination".to_string());
+        *byte_offset += i;
+        return Err(format!(
+            "No proper termination at byte offset {}",
+            *byte_offset
+        ));
     }
 
     i += 2;
+    *byte_offset += i;
     match sign {
         Some(s) => {
             let mut v = vec![s];
@@ -335,15 +356,22 @@ fn parse_integers(data: &[u8]) -> Result<(RequestType, usize), String> {
 // The CRLF terminator.
 // The data.
 // A final CRLF.
-fn parse_bulk_strings(data: &[u8]) -> Result<(RequestType, usize), String> {
+fn parse_bulk_strings(
+    data: &[u8],
+    byte_offset: &mut usize,
+) -> Result<(RequestType, usize), String> {
     let mut i = 0;
     let mut length = Vec::new();
     while i < data.len() && data[i] != b'\r' {
         length.push(data[i]);
         i += 1;
     }
+    *byte_offset += i;
     if i >= data.len() || i + 1 >= data.len() || data[i] != b'\r' || data[i + 1] != b'\n' {
-        return Err("No proper termination".to_string());
+        return Err(format!(
+            "No proper termination at byte offset: {}",
+            *byte_offset
+        ));
     }
 
     let str_length = match String::from_utf8(length.to_vec()) {
@@ -352,10 +380,13 @@ fn parse_bulk_strings(data: &[u8]) -> Result<(RequestType, usize), String> {
     };
     let length = match str_length.parse::<i64>() {
         Ok(len) => len,
-        Err(_) => return Err("i64 from ascii".to_string()), // Error in parsing length
+        Err(_) => {
+            return Err(format!("i64 from ascii at byte offset: {}", *byte_offset));
+        } // Error in parsing length
     };
 
     i += 2;
+    *byte_offset += 2;
     // null bstrings
     // $-1\r\n
     if length < 0 {
@@ -363,17 +394,19 @@ fn parse_bulk_strings(data: &[u8]) -> Result<(RequestType, usize), String> {
     }
 
     if i + length as usize > data.len() {
-        return Err("Not enough data".to_string());
+        return Err(format!("Not enough data at offset: {}", *byte_offset));
     }
 
     let content = &data[i..i + length as usize];
     i += length as usize;
+    *byte_offset += length as usize;
 
     if i + 1 >= data.len() || data[i] != b'\r' || data[i + 1] != b'\n' {
-        return Err("No proper termination".to_string());
+        return Err(format!("No proper termination at offset: {}", *byte_offset));
     }
 
     i += 2;
+    *byte_offset += 2;
     Ok((
         RequestType::BulkString {
             data: content.to_vec(),
@@ -389,23 +422,35 @@ fn parse_bulk_strings(data: &[u8]) -> Result<(RequestType, usize), String> {
 // the array as an unsigned, base-10 value.
 // The CRLF terminator.
 // An additional RESP type for every element of the array.
-fn parse_arrays(data: &[u8]) -> Result<(RequestType, usize), String> {
+fn parse_arrays(data: &[u8], byte_offset: &mut usize) -> Result<(RequestType, usize), String> {
     let mut i = 0;
     let mut length = Vec::new();
     while i < data.len() && data[i] != b'\r' {
         length.push(data[i]);
         i += 1;
     }
+    *byte_offset += i;
 
     let str_length = match String::from_utf8(length.to_vec()) {
         Ok(s) => s,
-        Err(e) => return Err(e.to_string()),
+        Err(e) => {
+            return Err(format!(
+                "Invalid characters at offset: {}: {e}",
+                *byte_offset
+            ));
+        }
     };
     let length = match str_length.parse::<i64>() {
         Ok(len) => len,
-        Err(_) => return Err("u64 from ascii".to_string()),
+        Err(err) => {
+            return Err(format!(
+                "Failed to parse to length at offset: {}: {err}",
+                *byte_offset
+            ));
+        }
     };
     i += 2; // Skip \r\n
+    *byte_offset += 2;
 
     // null arrays
     if length < 1 {
@@ -422,20 +467,21 @@ fn parse_arrays(data: &[u8]) -> Result<(RequestType, usize), String> {
         };
 
         i += 1;
+        *byte_offset += 1;
 
         match elem_type {
             DataType::Array => {
-                let (nested_elems, consumed) = parse_arrays(&data[i..])?;
+                let (nested_elems, consumed) = parse_arrays(&data[i..], byte_offset)?;
                 elements.push(nested_elems);
                 i += consumed;
             }
             _ => {
                 let (content, consumed) = match elem_type {
-                    DataType::Integer => parse_integers(&data[i..])?,
-                    DataType::BulkString => parse_bulk_strings(&data[i..])?,
-                    DataType::SimpleString => parse_simple_strings(&data[i..])?,
-                    DataType::SimpleError => parse_simple_errors(&data[i..])?,
-                    DataType::Maps => parse_maps(&data[i..])?,
+                    DataType::Integer => parse_integers(&data[i..], byte_offset)?,
+                    DataType::BulkString => parse_bulk_strings(&data[i..], byte_offset)?,
+                    DataType::SimpleString => parse_simple_strings(&data[i..], byte_offset)?,
+                    DataType::SimpleError => parse_simple_errors(&data[i..], byte_offset)?,
+                    DataType::Maps => parse_maps(&data[i..], byte_offset)?,
                     _ => (RequestType::Null, 0),
                 };
 
@@ -449,28 +495,34 @@ fn parse_arrays(data: &[u8]) -> Result<(RequestType, usize), String> {
 }
 
 // _\r\n
-fn parse_null(data: &[u8]) -> Result<(RequestType, usize), String> {
+fn parse_null(data: &[u8], byte_offset: &mut usize) -> Result<(RequestType, usize), String> {
     if data[0] == b'\r' && data[1] == b'\n' {
+        *byte_offset += 2;
         return Ok((RequestType::Null, 2));
     }
-    Err("Invalid null format".to_string())
+    Err(format!("Invalid null format at offset: {}", *byte_offset))
 }
 
 // #<t|f>\r\n
-fn parse_booleans(data: &[u8]) -> Result<(RequestType, usize), String> {
+fn parse_booleans(data: &[u8], byte_offset: &mut usize) -> Result<(RequestType, usize), String> {
     if (data[0] == b't') && (data[1] == b'\r' && data[2] == b'\n') {
+        *byte_offset += 3;
         return Ok((RequestType::Boolean { data: true }, 3));
     }
 
     if (data[0] == b'f') && (data[1] == b'\r' && data[2] == b'\n') {
+        *byte_offset += 3;
         return Ok((RequestType::Boolean { data: false }, 3));
     }
 
-    Err("Invalid boolean format".to_string())
+    Err(format!(
+        "Invalid boolena format at offset: {}",
+        *byte_offset
+    ))
 }
 
 // ,[<+|->]<integral>[.<fractional>][<E|e>[sign]<exponent>]\r\n
-fn parse_doubles(data: &[u8]) -> Result<(RequestType, usize), String> {
+fn parse_doubles(data: &[u8], byte_offset: &mut usize) -> Result<(RequestType, usize), String> {
     let mut i = 0;
     let num_sign = match data[i] {
         b'-' => {
@@ -483,17 +535,21 @@ fn parse_doubles(data: &[u8]) -> Result<(RequestType, usize), String> {
         }
         _ => None,
     };
+    *byte_offset += i;
 
     let mut num_bytes = Vec::new();
 
     // ,inf\r\n
     if data[i] == b'i' && data[i + 1] == b'n' && data[i + 2] == b'f' {
+        *byte_offset += 3;
         if data[i + 3] == b'\r' && data[i + 4] == b'\n' {
             if let Some(s) = num_sign {
                 let mut v = vec![s];
                 v.extend_from_slice(&data[1..4]);
+                *byte_offset += 3;
                 return Ok((RequestType::Double { data: v }, 6));
             } else {
+                *byte_offset += 2;
                 return Ok((
                     RequestType::Double {
                         data: data[..3].to_vec(),
@@ -502,13 +558,15 @@ fn parse_doubles(data: &[u8]) -> Result<(RequestType, usize), String> {
                 ));
             }
         } else {
-            return Err("Unterminated infinite".to_string());
+            return Err(format!("Unterminated infinite at offset: {}", *byte_offset));
         }
     }
 
     // ,nan\r\n
     if data[i] == b'n' && data[i + 1] == b'a' && data[i + 2] == b'n' && num_sign.is_none() {
+        *byte_offset += 3;
         if data[i + 3] == b'\r' && data[i + 4] == b'\n' {
+            *byte_offset += 2;
             return Ok((
                 RequestType::Double {
                     data: data[..3].to_vec(),
@@ -516,18 +574,23 @@ fn parse_doubles(data: &[u8]) -> Result<(RequestType, usize), String> {
                 5,
             ));
         } else {
-            return Err("Unterminated NaN value".to_string());
+            return Err(format!(
+                "Unterminated NaN value at offset: {}",
+                *byte_offset
+            ));
         }
     }
 
     while i < data.len() && data[i].is_ascii_alphanumeric() {
         num_bytes.push(data[i]);
         i += 1;
+        *byte_offset += 1;
     }
 
     let dot = match data[i] {
         b'.' => {
             i += 1;
+            *byte_offset += 1;
             Some(b'.')
         }
         _ => None,
@@ -535,6 +598,7 @@ fn parse_doubles(data: &[u8]) -> Result<(RequestType, usize), String> {
 
     if dot.is_none() {
         if data[i] == b'\r' && data[i + 1] == b'\n' {
+            *byte_offset += 2;
             if let Some(s) = num_sign {
                 let mut v = vec![s];
                 v.append(&mut num_bytes);
@@ -542,17 +606,19 @@ fn parse_doubles(data: &[u8]) -> Result<(RequestType, usize), String> {
             }
             return Ok((RequestType::Double { data: num_bytes }, i));
         } else {
-            return Err("unterminated double".to_string());
+            return Err(format!("unterminated double at offset: {}", *byte_offset));
         }
     }
 
     let e = match data[i] {
         b'e' => {
             i += 1;
+            *byte_offset += 1;
             Some(b'e')
         }
         b'E' => {
             i += 1;
+            *byte_offset += 1;
             Some(b'E')
         }
         _ => None,
@@ -561,6 +627,7 @@ fn parse_doubles(data: &[u8]) -> Result<(RequestType, usize), String> {
     let fraction_sign = match data[i] {
         b'-' => {
             i += 1;
+            *byte_offset += 1;
             Some(b'-')
         }
         _ => None,
@@ -570,16 +637,18 @@ fn parse_doubles(data: &[u8]) -> Result<(RequestType, usize), String> {
     while i < data.len() && data[i].is_ascii_alphanumeric() {
         fraction.push(data[i]);
         i += 1;
+        *byte_offset += 1;
     }
 
     if i > data.len() {
-        return Err("unterminated double".to_string());
+        return Err(format!("Unterminated double at offset: {}", *byte_offset));
     }
 
     if data[i] == b'\r' && data[i + 1] == b'\n' {
+        *byte_offset += 2;
         i += 2;
     } else {
-        return Err("Unterminated double".to_string());
+        return Err(format!("Unterminated double at offset: {}", *byte_offset));
     }
 
     let mut result = Vec::new();
@@ -604,7 +673,7 @@ fn parse_doubles(data: &[u8]) -> Result<(RequestType, usize), String> {
 }
 
 // ([+|-]<number>\r\n
-fn parse_big_numbers(data: &[u8]) -> Result<(RequestType, usize), String> {
+fn parse_big_numbers(data: &[u8], byte_offset: &mut usize) -> Result<(RequestType, usize), String> {
     let mut i = 0;
     let sign = match data[i] {
         b'-' => {
@@ -617,18 +686,24 @@ fn parse_big_numbers(data: &[u8]) -> Result<(RequestType, usize), String> {
         }
         _ => None,
     };
+    *byte_offset += i;
 
     let mut num_bytes = Vec::new();
 
     while i < data.len() && data[i].is_ascii_alphanumeric() {
         num_bytes.push(data[i]);
         i += 1;
+        *byte_offset += 1;
     }
 
     if data[i] != b'\r' && data[i + 1] != b'\n' {
-        return Err("unterminated big number".to_string());
+        return Err(format!(
+            "Unterminated big number at offset: {}",
+            *byte_offset
+        ));
     }
     i += 2;
+    *byte_offset += 2;
 
     if let Some(s) = sign {
         let mut v = vec![s];
@@ -639,27 +714,43 @@ fn parse_big_numbers(data: &[u8]) -> Result<(RequestType, usize), String> {
     }
 }
 
-fn parse_bulk_errors(data: &[u8]) -> Result<(RequestType, usize), String> {
+fn parse_bulk_errors(data: &[u8], byte_offset: &mut usize) -> Result<(RequestType, usize), String> {
     let mut i = 0;
     let mut length = Vec::new();
     while i < data.len() && data[i] != b'\r' {
         length.push(data[i]);
         i += 1;
     }
+    *byte_offset += i;
+
     if i >= data.len() || i + 1 >= data.len() || data[i] != b'\r' || data[i + 1] != b'\n' {
-        return Err("No proper termination".to_string());
+        return Err(format!(
+            "No proper termination at byte offset: {}",
+            *byte_offset
+        ));
     }
 
     let str_length = match String::from_utf8(length.to_vec()) {
         Ok(s) => s,
-        Err(e) => return Err(e.to_string()),
+        Err(err) => {
+            return Err(format!(
+                "Invalid string characters at byte offset: {}, {err}",
+                *byte_offset
+            ));
+        }
     };
     let length = match str_length.parse::<i64>() {
         Ok(len) => len,
-        Err(_) => return Err("i64 from ascii".to_string()), // Error in parsing length
+        Err(err) => {
+            return Err(format!(
+                "Failed to parse length at byte offset: {}, {err}",
+                *byte_offset
+            ));
+        } // Error in parsing length
     };
 
     i += 2;
+    *byte_offset += 2;
     // null bulk errors
     // $-1\r\n
     if length < 0 {
@@ -667,17 +758,22 @@ fn parse_bulk_errors(data: &[u8]) -> Result<(RequestType, usize), String> {
     }
 
     if i + length as usize > data.len() {
-        return Err("Not enough data".to_string());
+        return Err(format!("Not enough data at byte offset: {}", *byte_offset));
     }
 
     let content = &data[i..i + length as usize];
     i += length as usize;
+    *byte_offset += length as usize;
 
     if i + 1 >= data.len() || data[i] != b'\r' || data[i + 1] != b'\n' {
-        return Err("No proper termination".to_string());
+        return Err(format!(
+            "No proper termination at byte offset: {}",
+            *byte_offset
+        ));
     }
 
     i += 2;
+    *byte_offset += 2;
     Ok((
         RequestType::BulkError {
             data: content.to_vec(),
@@ -696,56 +792,89 @@ fn parse_bulk_errors(data: &[u8]) -> Result<(RequestType, usize), String> {
 // The colon (:) character separates the encoding and data.
 // The data.
 // A final CRLF.
-fn parse_verbatim_strings(data: &[u8]) -> Result<(RequestType, usize), String> {
+fn parse_verbatim_strings(
+    data: &[u8],
+    byte_offset: &mut usize,
+) -> Result<(RequestType, usize), String> {
     let mut len_bytes = Vec::new();
     let mut i = 0;
     while i < data.len() && data[i].is_ascii_alphanumeric() {
         len_bytes.push(data[i]);
         i += 1;
     }
+    *byte_offset += i;
 
     if i >= data.len() || i + 2 >= data.len() {
-        return Err("no proper length termination".to_string());
+        return Err(format!(
+            "No proper length termination at byte offset: {}",
+            *byte_offset
+        ));
     }
 
     if data[i] != b'\r' || data[i + 1] != b'\n' {
-        return Err("Invalid".to_string());
+        return Err(format!(
+            "Invalid termination format at byte offset: {}",
+            *byte_offset
+        ));
     }
     i += 2;
+    *byte_offset += 2;
 
     let str_length = match String::from_utf8(len_bytes.to_vec()) {
         Ok(s) => s,
-        Err(e) => return Err(e.to_string()),
+        Err(e) => {
+            return Err(format!(
+                "Invalid string characters at byte offset: {}, {e}",
+                *byte_offset
+            ));
+        }
     };
     let s_len: usize = match str_length.parse::<u64>() {
         Ok(l) => l.try_into().unwrap(),
-        Err(e) => return Err(e.to_string()),
+        Err(e) => {
+            return Err(format!(
+                "Failed to parse length at byte offset: {}, {e}",
+                *byte_offset
+            ));
+        }
     };
 
     if s_len >= data.len() {
-        return Err("Data length mismatch actaul length".to_string());
+        return Err(format!(
+            "Data length mismatch actaul length at byte offset: {}",
+            *byte_offset
+        ));
     }
 
     if i + 3 >= data.len() {
-        return Err("Missing encoding".to_string());
+        return Err(format!("Missing encoding at byte offset: {}", *byte_offset));
     }
 
     let encoding = data[i..i + 3].to_vec();
     i += 3;
+    *byte_offset += 3;
 
     if data[i] != b':' {
-        return Err("Missing : separator".to_string());
+        return Err(format!(
+            "Missing : separator at byte offset: {}",
+            *byte_offset
+        ));
     }
     i += 1;
+    *byte_offset += 1;
 
+    // why minus 4? Encoding + colon
     let v_string = data[i..i + s_len - 4].to_vec();
 
-    i += s_len - 4;
+    let diff = s_len - 4;
+    i += diff;
+    *byte_offset += diff;
 
     if data[i] != b'\r' || data[i + 1] != b'\n' {
         return Err("No proper termination".to_string());
     }
     i += 2;
+    *byte_offset += 2;
 
     Ok((
         RequestType::VerbatimString {
@@ -756,7 +885,7 @@ fn parse_verbatim_strings(data: &[u8]) -> Result<(RequestType, usize), String> {
 }
 
 // %<number-of-entries>\r\n<key-1><value-1>...<key-n><value-n>
-fn parse_maps(data: &[u8]) -> Result<(RequestType, usize), String> {
+fn parse_maps(data: &[u8], byte_offset: &mut usize) -> Result<(RequestType, usize), String> {
     let mut len_bytes = Vec::new();
     let mut i = 0;
 
@@ -764,37 +893,56 @@ fn parse_maps(data: &[u8]) -> Result<(RequestType, usize), String> {
         len_bytes.push(data[i]);
         i += 1;
     }
+    *byte_offset += i;
 
     let str_length = match String::from_utf8(len_bytes.to_vec()) {
         Ok(s) => s,
-        Err(e) => return Err(e.to_string()),
+        Err(e) => {
+            return Err(format!(
+                "Invalid string characters at byte offset: {}, {e}",
+                *byte_offset
+            ));
+        }
     };
+
     let num_of_entries: usize = match str_length.parse::<u64>() {
         Ok(l) => l.try_into().unwrap(),
-        Err(e) => return Err(e.to_string()),
+        Err(e) => {
+            return Err(format!(
+                "Failed to parse length at byte offset: {}, {e}",
+                *byte_offset
+            ));
+        }
     };
 
     if i + 2 > data.len() {
-        return Err("Invalid map".to_string());
+        return Err(format!(
+            "Invalid map format at byte offset: {}",
+            *byte_offset
+        ));
     }
 
     if data[i] != b'\r' || data[i + 1] != b'\n' {
-        return Err("No proper number of entries termination".to_string());
+        return Err(format!(
+            "No proper number of entries termination at byte offset: {}",
+            *byte_offset
+        ));
     }
     i += 2;
+    *byte_offset += 2;
 
     let mut entries = HashMap::with_capacity(num_of_entries);
     let mut n = 0;
     while i < data.len() && n < num_of_entries {
-        let (key, consumed) = parse_nested_entry(&data[i..])?;
+        let (key, consumed) = parse_nested_entry(&data[i..], byte_offset)?;
         i += consumed;
-        let (value, consumed) = parse_nested_entry(&data[i..])?;
+        let (value, consumed) = parse_nested_entry(&data[i..], byte_offset)?;
         i += consumed;
 
         let key = match key {
             RequestType::BulkString { data } => String::from_utf8_lossy(&data).to_string(),
             RequestType::SimpleString { data } => String::from_utf8_lossy(&data).to_string(),
-            _ => return Err("Invalid key type".to_string()),
+            _ => return Err(format!("Invalid key type at byte offset: {}", *byte_offset)),
         };
 
         entries.insert(key, value);
@@ -804,34 +952,46 @@ fn parse_maps(data: &[u8]) -> Result<(RequestType, usize), String> {
     Ok((RequestType::Map { children: entries }, i))
 }
 
-fn parse_nested_entry(data: &[u8]) -> Result<(RequestType, usize), String> {
+fn parse_nested_entry(
+    data: &[u8],
+    byte_offset: &mut usize,
+) -> Result<(RequestType, usize), String> {
     if data.is_empty() {
         return Ok((RequestType::Null, 0));
     }
 
     let (content, consumed) = match get_data_type(data[0]) {
-        DataType::SimpleString => parse_simple_strings(&data[1..])?,
-        DataType::SimpleError => parse_simple_errors(&data[1..])?,
-        DataType::BulkString => parse_bulk_strings(&data[1..])?,
-        DataType::Integer => parse_integers(&data[1..])?,
-        DataType::Null => parse_null(&data[1..])?,
-        DataType::Boolean => parse_booleans(&data[1..])?,
-        DataType::Double => parse_doubles(&data[1..])?,
-        DataType::BigNumber => parse_big_numbers(&data[1..])?,
-        DataType::BulkError => parse_bulk_errors(&data[1..])?,
-        DataType::Unknown => return Err(format!("Unknown datatype: {}", data[0])),
-        _ => return Err("Unreachable end".to_string()),
-        // DataType::Array => todo!(),
-        // DataType::Maps => todo!(),
-        // DataType::Sets => todo!(),
-        // DataType::VerbatimString => todo!(),
+        DataType::SimpleString => parse_simple_strings(&data[1..], byte_offset)?,
+        DataType::SimpleError => parse_simple_errors(&data[1..], byte_offset)?,
+        DataType::BulkString => parse_bulk_strings(&data[1..], byte_offset)?,
+        DataType::Integer => parse_integers(&data[1..], byte_offset)?,
+        DataType::Null => parse_null(&data[1..], byte_offset)?,
+        DataType::Boolean => parse_booleans(&data[1..], byte_offset)?,
+        DataType::Double => parse_doubles(&data[1..], byte_offset)?,
+        DataType::BigNumber => parse_big_numbers(&data[1..], byte_offset)?,
+        DataType::BulkError => parse_bulk_errors(&data[1..], byte_offset)?,
+        DataType::Unknown => {
+            return Err(format!(
+                "Unknown datatype: {} at byte offset: {}",
+                data[0], *byte_offset
+            ));
+        }
+        _ => {
+            return Err(format!(
+                "Unreachable end! Current byte offset: {}! This feature isn't yet implemented!",
+                *byte_offset
+            ));
+        } // DataType::Array => todo!(),
+          // DataType::Maps => todo!(),
+          // DataType::Sets => todo!(),
+          // DataType::VerbatimString => todo!(),
     };
 
     Ok((content, consumed + 1))
 }
 
 // ~<number-of-elements>\r\n<element-1>...<element-n>
-fn parse_sets(data: &[u8]) -> Result<(RequestType, usize), String> {
+fn parse_sets(data: &[u8], byte_offset: &mut usize) -> Result<(RequestType, usize), String> {
     let mut i = 0;
     let mut len_bytes = Vec::new();
 
@@ -839,33 +999,54 @@ fn parse_sets(data: &[u8]) -> Result<(RequestType, usize), String> {
         len_bytes.push(data[i]);
         i += 1;
     }
+    *byte_offset += i;
 
     if i + 2 >= data.len() {
-        return Err("invalid format!".to_string());
+        return Err(format!("Invalid format at byte offset: {}", *byte_offset));
     }
     if data[i] != b'\r' || data[i + 1] != b'\n' {
-        return Err("Unterminated length".to_string());
+        return Err(format!(
+            "Unterminated length at byte offset: {}",
+            byte_offset
+        ));
     }
 
     i += 2;
+    *byte_offset += 2;
 
     let str_length = match String::from_utf8(len_bytes.to_vec()) {
         Ok(s) => s,
-        Err(e) => return Err(e.to_string()),
+        Err(e) => {
+            return Err(format!(
+                "Invalid string characters at byte offset: {}, {e}",
+                *byte_offset
+            ));
+        }
     };
+
     let length: usize = match str_length.parse::<u64>() {
         Ok(l) => l.try_into().unwrap(),
-        Err(e) => return Err(e.to_string()),
+        Err(e) => {
+            return Err(format!(
+                "Failed to parse length at byte offset: {}, {e}",
+                *byte_offset
+            ));
+        }
     };
 
     let mut entries = HashSet::with_capacity(length);
 
     let mut n = 0;
     while i < data.len() && n < length {
-        let (entry, consumed) = parse_nested_entry(data)?;
+        let (entry, consumed) = parse_nested_entry(data, byte_offset)?;
         let entry = match entry {
             RequestType::BulkString { data } => data.to_vec(),
-            _ => return Err("Invalid set entry type".to_string()),
+            _ => {
+                return Err(format!(
+                    "Invalid set entry data type at byte offset: {}",
+                    *byte_offset
+                ));
+            }
         };
 
         entries.insert(entry);
@@ -876,33 +1057,45 @@ fn parse_sets(data: &[u8]) -> Result<(RequestType, usize), String> {
     Ok((RequestType::Set { children: entries }, i))
 }
 
+// Transforms a series of bytes into a RESP request type
 pub fn parse_request(data: &[u8]) -> Result<RequestType, String> {
+    // Track the current cursor byte position across parsing stages
+    // for improved error messages
+    //
+    // Example:
+    //     Invalid character '{' at byte offset 127
+    //
+    let mut byte_offset = 0;
     let mut i = 0;
     if data.is_empty() {
         return Ok(RequestType::Null);
     }
 
     let data_type = match get_data_type(data[i]) {
-        DataType::Unknown => return Err("unknown type".to_string()),
+        DataType::Unknown => {
+            return Err(format!("Unknown data type at byte offset: {}", byte_offset));
+        }
         t => t,
     };
     i += 1;
 
     let (content, _) = match data_type {
-        DataType::Integer => parse_integers(&data[i..])?,
-        DataType::BulkString => parse_bulk_strings(&data[i..])?,
-        DataType::SimpleString => parse_simple_strings(&data[i..])?,
-        DataType::SimpleError => parse_simple_errors(&data[i..])?,
-        DataType::Array => parse_arrays(&data[i..])?,
-        DataType::Null => parse_null(&data[i..])?,
-        DataType::Boolean => parse_booleans(&data[i..])?,
-        DataType::Double => parse_doubles(&data[i..])?,
-        DataType::BigNumber => parse_big_numbers(&data[i..])?,
-        DataType::BulkError => parse_bulk_errors(&data[i..])?,
-        DataType::VerbatimString => parse_verbatim_strings(&data[i..])?,
-        DataType::Maps => parse_maps(&data[i..])?,
-        DataType::Sets => parse_sets(&data[i..])?,
-        DataType::Unknown => return Err("Unknown data type!".to_string()),
+        DataType::Integer => parse_integers(&data[i..], &mut byte_offset)?,
+        DataType::BulkString => parse_bulk_strings(&data[i..], &mut byte_offset)?,
+        DataType::SimpleString => parse_simple_strings(&data[i..], &mut byte_offset)?,
+        DataType::SimpleError => parse_simple_errors(&data[i..], &mut byte_offset)?,
+        DataType::Array => parse_arrays(&data[i..], &mut byte_offset)?,
+        DataType::Null => parse_null(&data[i..], &mut byte_offset)?,
+        DataType::Boolean => parse_booleans(&data[i..], &mut byte_offset)?,
+        DataType::Double => parse_doubles(&data[i..], &mut byte_offset)?,
+        DataType::BigNumber => parse_big_numbers(&data[i..], &mut byte_offset)?,
+        DataType::BulkError => parse_bulk_errors(&data[i..], &mut byte_offset)?,
+        DataType::VerbatimString => parse_verbatim_strings(&data[i..], &mut byte_offset)?,
+        DataType::Maps => parse_maps(&data[i..], &mut byte_offset)?,
+        DataType::Sets => parse_sets(&data[i..], &mut byte_offset)?,
+        DataType::Unknown => {
+            return Err(format!("Unknown data type at byte offset: {}", byte_offset));
+        }
     };
 
     Ok(content)
@@ -922,19 +1115,22 @@ mod resp3_tests {
     #[test]
     fn test_booleans() {
         let n = b"#t\r\n";
-        let (data, _) = parse_booleans(&n[1..]).unwrap();
+        let mut offset = 0;
+        let (data, _) = parse_booleans(&n[1..], &mut offset).unwrap();
 
         assert_eq!(data, RequestType::Boolean { data: true });
 
         let n = b"#f\r\n";
-        let (data, _) = parse_booleans(&n[1..]).unwrap();
+        offset = 0;
+        let (data, _) = parse_booleans(&n[1..], &mut offset).unwrap();
         assert_eq!(data, RequestType::Boolean { data: false });
     }
 
     #[test]
     fn test_basic_doubles() {
         let n = b",1.23\r\n";
-        let (data, consumed) = parse_doubles(&n[1..]).unwrap();
+        let mut offset = 0;
+        let (data, consumed) = parse_doubles(&n[1..], &mut offset).unwrap();
 
         assert!(consumed > 0);
         assert_eq!(
@@ -945,7 +1141,8 @@ mod resp3_tests {
         );
 
         let n = b",+1.23\r\n";
-        let (data, consumed) = parse_doubles(&n[1..]).unwrap();
+        offset = 0;
+        let (data, consumed) = parse_doubles(&n[1..], &mut offset).unwrap();
 
         assert!(consumed > 0);
         assert_eq!(
@@ -956,7 +1153,8 @@ mod resp3_tests {
         );
 
         let n = b",-1.23\r\n";
-        let (data, consumed) = parse_doubles(&n[1..]).unwrap();
+        offset = 0;
+        let (data, consumed) = parse_doubles(&n[1..], &mut offset).unwrap();
 
         assert!(consumed > 0);
         assert_eq!(
@@ -970,7 +1168,8 @@ mod resp3_tests {
     #[test]
     fn test_int_double() {
         let n = b",10\r\n";
-        let (data, _) = parse_doubles(&n[1..]).unwrap();
+        let mut offset = 0;
+        let (data, _) = parse_doubles(&n[1..], &mut offset).unwrap();
 
         assert_eq!(
             data,
@@ -983,7 +1182,8 @@ mod resp3_tests {
     #[test]
     fn test_negative_infinity() {
         let n = b",-inf\r\n";
-        let (data, _) = parse_doubles(&n[1..]).unwrap();
+        let mut offset = 0;
+        let (data, _) = parse_doubles(&n[1..], &mut offset).unwrap();
 
         assert_eq!(
             data,
@@ -996,7 +1196,9 @@ mod resp3_tests {
     #[test]
     fn test_nan() {
         let n = b",nan\r\n";
-        let (data, _) = parse_doubles(&n[1..]).unwrap();
+
+        let mut offset = 0;
+        let (data, _) = parse_doubles(&n[1..], &mut offset).unwrap();
 
         assert_eq!(
             data,
@@ -1009,7 +1211,9 @@ mod resp3_tests {
     #[test]
     fn test_big_number() {
         let n = b"(3492890328409238509324850943850943825024385\r\n";
-        let (data, consumed) = parse_big_numbers(&n[1..]).unwrap();
+
+        let mut offset = 0;
+        let (data, consumed) = parse_big_numbers(&n[1..], &mut offset).unwrap();
         let l = n.len();
 
         assert_eq!(consumed, l - 1);
@@ -1020,7 +1224,8 @@ mod resp3_tests {
     #[test]
     fn test_bulk_error() {
         let n = b"!21\r\nSYNTAX invalid syntax\r\n";
-        let (data, consumed) = parse_bulk_errors(&n[1..]).unwrap();
+        let mut offset = 0;
+        let (data, consumed) = parse_bulk_errors(&n[1..], &mut offset).unwrap();
 
         let l = n.len();
         let expected: Vec<u8> = n[5..l - 2].to_vec();
@@ -1031,7 +1236,9 @@ mod resp3_tests {
     #[test]
     fn test_verbatim_string() {
         let n = b"=15\r\ntxt:Some string\r\n";
-        let (data, consumed) = parse_verbatim_strings(&n[1..]).unwrap();
+
+        let mut offset = 0;
+        let (data, consumed) = parse_verbatim_strings(&n[1..], &mut offset).unwrap();
         let l = n.len();
         let expected: Vec<Vec<u8>> = vec![b"txt".to_vec(), b"Some string".to_vec()];
         assert_eq!(consumed, l - 1);
@@ -1045,6 +1252,7 @@ mod resp3_tests {
     #[test]
     fn test_simple_map() {
         let n = b"%2\r\n+first\r\n:1\r\n+second\r\n:2\r\n";
+        let mut offset = 0;
         let l = n.len();
 
         let expected = HashMap::from([
@@ -1062,7 +1270,7 @@ mod resp3_tests {
             ),
         ]);
 
-        let (data, consumed) = parse_maps(&n[1..]).unwrap();
+        let (data, consumed) = parse_maps(&n[1..], &mut offset).unwrap();
         assert_eq!(data, RequestType::Map { children: expected });
         assert_eq!(consumed, l - 1);
     }
