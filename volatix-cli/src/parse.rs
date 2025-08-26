@@ -113,7 +113,7 @@ pub fn parse_arg(chars: &[char], pointer: &mut usize, arg_name: &str) -> Result<
 
     // Check if we have any characters left
     if *pointer >= l {
-        return Err(format!("Missing {arg_name}"));
+        return Err(format!("Missing {arg_name} at byte offset {}", *pointer));
     }
 
     // Check for quote delimiters (single or double quotes)
@@ -139,12 +139,15 @@ pub fn parse_arg(chars: &[char], pointer: &mut usize, arg_name: &str) -> Result<
         if *pointer < l && chars[*pointer] == delim {
             *pointer += 1; // Skip closing quote
         } else {
-            return Err(format!("Unclosed quote for {arg_name}"));
+            return Err(format!(
+                "Unclosed quote for {arg_name} at byte offset {}",
+                *pointer
+            ));
         }
     } else {
         // Handle unquoted string - read until whitespace or delimiter
         if *pointer >= l {
-            return Err(format!("Missing {arg_name}"));
+            return Err(format!("Missing {arg_name} at byte offset {}", *pointer));
         }
 
         // Skip any remaining whitespace
@@ -165,7 +168,10 @@ pub fn parse_arg(chars: &[char], pointer: &mut usize, arg_name: &str) -> Result<
         }
 
         if arg_chars.is_empty() {
-            return Err(format!("Missing {arg_name} after whitespace"));
+            return Err(format!(
+                "Missing {arg_name} after whitespace at byte offset {}",
+                *pointer
+            ));
         }
     }
 
@@ -197,14 +203,19 @@ pub fn parse_list(chars: &[char], pointer: &mut usize) -> Result<Vec<String>, St
         *pointer += 1; // Skip opening delimiter
         chars[*pointer - 1]
     } else {
-        return Err("Missing list_start delimeter".to_string());
+        return Err(format!(
+            "Missing list_start delimeter at byte offset {}",
+            *pointer
+        ));
     };
 
     // Find matching closing delimiter
     let end_delimeter = match delimeter {
         '[' => ']',
         '{' => '}',
-        _ => return Err("invalid end delimeter".to_string()),
+        _ => {
+            return Err(format!("Invalid end delimeter at byte offset {}", *pointer));
+        }
     };
 
     let separator = ',';
@@ -266,7 +277,7 @@ pub fn parse_map(data: &[char], pointer: &mut usize) -> Result<HashMap<String, S
     if *pointer < data.len() && data[*pointer] == left_delim {
         *pointer += 1; // Skip opening brace
     } else {
-        return Err("Missing left brace".to_string());
+        return Err(format!("Missing left brace at byte offset {}", *pointer));
     }
 
     // Parse key-value pairs until closing brace
@@ -288,7 +299,10 @@ pub fn parse_map(data: &[char], pointer: &mut usize) -> Result<HashMap<String, S
         if *pointer < data.len() && data[*pointer] == ':' {
             *pointer += 1; // Skip colon
         } else {
-            return Err("Missing colon separator".to_string());
+            return Err(format!(
+                "Missing colon separator at byte offset {}",
+                *pointer
+            ));
         }
 
         // Parse value
@@ -319,7 +333,7 @@ pub fn parse_map(data: &[char], pointer: &mut usize) -> Result<HashMap<String, S
     if *pointer < data.len() && data[*pointer] == right_delim {
         *pointer += 1; // Skip closing brace
     } else {
-        return Err("Missing right brace".to_string());
+        return Err(format!("Missing right brace at byte offset {}", *pointer));
     }
 
     Ok(map)
@@ -393,7 +407,9 @@ pub fn parse_line(line: &str) -> Command {
             Ok(key) => match parse_list(&chars, &mut pointer) {
                 Ok(l) => {
                     if l.len() % 2 != 0 {
-                        Command::ParseError("Invalid number of args".to_string())
+                        Command::ParseError(format!(
+                            "Invalid number of args at byte offset {pointer}",
+                        ))
                     } else {
                         Command::SetList { key, list: l }
                     }
@@ -423,7 +439,11 @@ pub fn parse_line(line: &str) -> Command {
                     Ok(ttl) => {
                         let ttl = match ttl.parse::<u64>() {
                             Ok(v) => v,
-                            Err(e) => return Command::ParseError(format!("{e:?}")),
+                            Err(e) => {
+                                return Command::ParseError(format!(
+                                    "Invalid integer type at byte offset {pointer}: {e}"
+                                ));
+                            }
                         };
                         Command::SetwTtl { key, value, ttl }
                     }
@@ -439,7 +459,11 @@ pub fn parse_line(line: &str) -> Command {
                 Ok(v) => {
                     let ttl = match v.parse::<i64>() {
                         Ok(v) => v,
-                        Err(e) => return Command::ParseError(format!("ERROR: {e}")),
+                        Err(e) => {
+                            return Command::ParseError(format!(
+                                "Invalid integer type at byte offset {pointer}: {e}"
+                            ));
+                        }
                     };
                     Command::Expire { key, addition: ttl }
                 }
@@ -450,7 +474,7 @@ pub fn parse_line(line: &str) -> Command {
 
         "GETTTL" => match parse_arg(&chars, &mut pointer, "key") {
             Ok(key) => Command::GetTtl { key },
-            Err(e) => Command::ParseError(format!("GET: {e}")),
+            Err(e) => Command::ParseError(e),
         },
 
         // set a config value
@@ -509,7 +533,9 @@ pub fn parse_line(line: &str) -> Command {
 
         "KEYS" => Command::Keys,
 
-        _ => Command::ParseError(format!("Unknown command: {cmd_str}")),
+        other => Command::ParseError(format!(
+            "Unknown command at byte offset {pointer} : {other}"
+        )),
     }
 }
 
