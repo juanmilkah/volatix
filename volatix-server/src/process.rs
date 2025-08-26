@@ -267,6 +267,11 @@ pub fn process_request(
                     bulk_string_response(Some(&options.to_string()))
                 }
 
+                "CONFRESET" => {
+                    storage.write().reset_options();
+                    bulk_string_response(Some("SUCCESS"))
+                }
+
                 // Administrative commands
                 "FLUSH" => {
                     storage.write().flush();
@@ -283,7 +288,7 @@ pub fn process_request(
                 }
 
                 // Unknown single commands return null
-                _ => null_response(),
+                _ => bulk_error_response("Unknown single command!"),
             }
         }
 
@@ -291,7 +296,7 @@ pub fn process_request(
         RequestType::Array { children } => process_array(children, storage),
 
         // All other request types are invalid
-        _ => null_response(),
+        _ => bulk_error_response("Unsupported format of commands!"),
     }
 }
 

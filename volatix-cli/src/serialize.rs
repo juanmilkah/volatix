@@ -210,6 +210,8 @@ pub fn serialize_request(command: &Command) -> Vec<u8> {
 
         Command::Keys => bstring("KEYS").as_bytes().to_vec(),
 
+        Command::ConfReset => bstring("CONFRESET").as_bytes().to_vec(),
+
         _ => Vec::new(),
     }
 }

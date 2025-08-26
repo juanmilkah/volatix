@@ -57,6 +57,7 @@ pub fn help() {
                 ("    SIZEAWARE", "Evict largest first"),
                 ("CONFSET <key> <value>", "Set a config value"),
                 ("CONFGET <key>", "Get a config value"),
+                ("CONFRESET", "Reset configurable options to the defaults"),
             ],
         ),
         (

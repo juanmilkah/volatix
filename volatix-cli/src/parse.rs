@@ -89,6 +89,7 @@ pub enum Command {
         key: String,
     }, // Get configuration parameter
     ConfOptions, // List all configurable options
+    ConfReset,   // Reset configurable options
 }
 
 /// Parses a single argument from the character stream
@@ -466,6 +467,9 @@ pub fn parse_line(line: &str) -> Command {
             Ok(key) => Command::ConfGet { key },
             Err(e) => Command::ParseError(e),
         },
+
+        // Reset configurable options
+        "CONFRESET" => Command::ConfReset,
 
         "DUMP" => match parse_arg(&chars, &mut pointer, "key") {
             Ok(key) => Command::Dump { key },
