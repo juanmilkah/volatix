@@ -37,6 +37,8 @@ pub struct LockedStorage {
     pub options: StorageOptions,
     /// Atomic statistics for thread-safe performance tracking
     pub stats: StorageStats,
+    /// A flag for any unsynched changes to disk
+    pub is_dirty: bool,
 }
 
 /// Serializable version of storage for disk persistence.
@@ -417,6 +419,7 @@ impl LockedStorage {
             store: Arc::new(RwLock::new(HashMap::with_capacity(1000))),
             options,
             stats: StorageStats::default(),
+            is_dirty: false,
         }
     }
 
@@ -427,6 +430,7 @@ impl LockedStorage {
         let old_config = self.options;
         let _old_storage = std::mem::take(self);
         self.options = old_config;
+        self.is_dirty = true;
     }
 
     /// Retrieves an entry by key, updating access statistics and metadata.
@@ -682,6 +686,7 @@ impl LockedStorage {
         // Insert the entry and update statistics
         self.store.write().insert(key, entry);
         self.stats.total_entries.fetch_add(1, Ordering::Relaxed);
+        self.is_dirty = true;
         Ok(())
     }
 
@@ -740,25 +745,35 @@ impl LockedStorage {
 
     /// Checks if the cache is at capacity.
     /// Used internally to decide when eviction is needed.
-    fn is_full(&self) -> bool {
+    pub fn is_full(&self) -> bool {
         self.store.read().len() as u64 >= self.options.max_capacity
     }
 
-    /// Checks the current maximum capcity of the storage
-    fn max_capacity(&self) -> u64 {
+    /// Checks whether storage has any unsyched changes to disk
+    pub fn should_flush(&self) -> bool {
+        self.is_dirty
+    }
+
+    /// Flip the state of the is_dirty storage flag
+    pub fn toggle_dirty_flag(&mut self) {
+        self.is_dirty = !self.is_dirty
+    }
+
+    /// Checks the current maximum capacity of the storage
+    pub fn max_capacity(&self) -> u64 {
         self.options.max_capacity
     }
 
     /// Check the total number of entries currently in the store.
     /// Valid and invalid values inclusive
-    fn entry_count(&self) -> usize {
+    pub fn entry_count(&self) -> usize {
         self.store.read().len()
     }
 
     /// Removes all expired entries from the cache.
     /// Called automatically during eviction and can be called manually.
     /// Updates statistics to track expired removals.
-    fn remove_expired(&mut self) {
+    pub fn remove_expired(&mut self) {
         let prev_count = self.store.read().len();
         let now = SystemTime::now();
         {
@@ -779,6 +794,7 @@ impl LockedStorage {
         self.stats
             .total_entries
             .store(current_count, Ordering::Release);
+        self.is_dirty = true;
     }
 
     /// Performs eviction based on the configured eviction policy.
@@ -1030,6 +1046,7 @@ impl LockedStorage {
             store: Arc::new(RwLock::new(unlocked_storage.store)),
             options: unlocked_storage.options,
             stats,
+            is_dirty: false,
         };
 
         Ok(())

@@ -110,9 +110,12 @@ async fn main() -> anyhow::Result<()> {
             args.snapshots_interval.unwrap_or(SNAPSHOTS_INTERVAL_TIME),
         ))
         .await;
-        let _ = snapshots_storage
-            .read()
-            .save_to_disk(&snapshots_persistent_path);
+        if snapshots_storage.read().should_flush() {
+            let _ = snapshots_storage
+                .read()
+                .save_to_disk(&snapshots_persistent_path);
+            snapshots_storage.write().toggle_dirty_flag();
+        }
     });
 
     loop {
