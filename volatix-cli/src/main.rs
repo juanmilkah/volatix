@@ -6,7 +6,7 @@ mod usage;
 use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream};
 
-use ::libvolatix::ascii_art;
+pub use ::libvolatix::ascii_art;
 use crossterm::{ExecutableCommand, QueueableCommand, cursor, event, terminal};
 use deserialize::{Response, deserialize_response};
 use parse::{Command, parse_line};
@@ -463,17 +463,12 @@ fn main() -> Result<(), String> {
         // Parse user input into a Command object
         let command = parse_line(line);
         match command {
-            Command::Help => {
+            Ok(Command::Help) => {
                 help();
                 continue;
             }
-            Command::ParseError(err) => {
-                eprintln!("ERROR: {err}\r");
-                // Put previous line onto stdout to allow for corrections
-                continue;
-            }
 
-            Command::Reconnect => {
+            Ok(Command::Reconnect) => {
                 println!("Reconnecting...\r");
 
                 // Close current connection
@@ -506,8 +501,8 @@ fn main() -> Result<(), String> {
                 continue;
             }
 
-            _ => {
-                let req = serialize_request(&command);
+            Ok(c) => {
+                let req = serialize_request(&c);
 
                 // If serialization fails, show help
                 if req.is_empty() {
@@ -520,6 +515,10 @@ fn main() -> Result<(), String> {
                     eprintln!("Failed writing to tcp stream\r");
                     continue;
                 }
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                continue;
             }
         }
 

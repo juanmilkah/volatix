@@ -1016,7 +1016,7 @@ impl LockedStorage {
     ///
     /// let mut storage = LockedStorage::new(StorageOptions::default());
     ///
-    /// let db_path = Path::new("volatix.db").to_path_buf();
+    /// let db_path = Path::new("cache.bin").to_path_buf();
     /// storage.load_from_disk(&db_path).expect("Failed to load cache");
     /// ```
     pub fn load_from_disk(&mut self, path: &PathBuf) -> anyhow::Result<()> {
@@ -1068,7 +1068,7 @@ impl LockedStorage {
     ///
     /// let storage = LockedStorage::new(StorageOptions::default());
     ///
-    /// let db_path = Path::new("cache.db").to_path_buf();
+    /// let db_path = Path::new("/tmp/cache.bin").to_path_buf();
     /// storage.save_to_disk(&db_path).expect("Failed to save cache");
     /// ```
     pub fn save_to_disk(&self, path: &PathBuf) -> anyhow::Result<()> {

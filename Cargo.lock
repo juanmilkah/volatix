@@ -175,13 +175,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b94f61472cee1439c0b966b47e3aca9ae07e45d070759512cd390ea2bebc6675"
 
 [[package]]
-name = "cli"
-version = "0.1.0"
-dependencies = [
- "crossterm",
-]
-
-[[package]]
 name = "colorchoice"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -338,6 +331,20 @@ name = "libc"
 version = "0.2.174"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1171693293099992e19cddea4e8b849964e9846f4acee11b3948bcc337be8776"
+
+[[package]]
+name = "libvolatix"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bincode2",
+ "clap",
+ "ctrlc",
+ "flate2",
+ "parking_lot",
+ "serde",
+ "tokio",
+]
 
 [[package]]
 name = "linux-raw-sys"
@@ -567,20 +574,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "server"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bincode2",
- "clap",
- "ctrlc",
- "flate2",
- "parking_lot",
- "serde",
- "tokio",
-]
-
-[[package]]
 name = "signal-hook"
 version = "0.3.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -721,6 +714,14 @@ dependencies = [
  "clap",
  "parking_lot",
  "rand",
+]
+
+[[package]]
+name = "volatix-cli"
+version = "0.1.0"
+dependencies = [
+ "crossterm",
+ "libvolatix",
 ]
 
 [[package]]

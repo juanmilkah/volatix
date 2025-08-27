@@ -33,6 +33,7 @@ clap = { version = "4.5.43", features = ["derive"] }
 crossterm = "0.29.0"
 ctrlc = "3.4.7"
 flate2 = "1.1.2"
+libvolatix = {path = "volatix-server"}
 parking_lot = "0.12.4"
 rand = "0.9.2"
 serde = { version = "1.0.219", features = ["derive"] }

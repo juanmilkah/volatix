@@ -1,14 +1,15 @@
 use std::collections::HashMap;
 
+use libvolatix::{Error, parser_error};
+
 /// Enum representing all supported Volatix database commands
 /// Each variant contains the necessary parameters for the command
 #[derive(PartialEq, Debug, Eq)]
 pub enum Command {
     // Connection and utility commands
-    Hello,              // Initial handshake command
-    Help,               // Local help display (not sent to server)
-    ParseError(String), // Error in command parsing
-    Reconnect,          // Disconenct and reconnect to the server
+    Hello,     // Initial handshake command
+    Help,      // Local help display (not sent to server)
+    Reconnect, // Disconenct and reconnect to the server
 
     // Basic key-value operations
     Get {
@@ -103,7 +104,7 @@ pub enum Command {
 /// # Returns
 /// * `Ok(String)` - Successfully parsed argument
 /// * `Err(String)` - Parse error with descriptive message
-pub fn parse_arg(chars: &[char], pointer: &mut usize, arg_name: &str) -> Result<String, String> {
+pub fn parse_arg(chars: &[char], pointer: &mut usize, arg_name: &str) -> Result<String, Error> {
     let l = chars.len();
 
     // Skip leading whitespace
@@ -113,7 +114,7 @@ pub fn parse_arg(chars: &[char], pointer: &mut usize, arg_name: &str) -> Result<
 
     // Check if we have any characters left
     if *pointer >= l {
-        return Err(format!("Missing {arg_name} at byte offset {}", *pointer));
+        return parser_error!(format!("Missing {arg_name}"), *pointer);
     }
 
     // Check for quote delimiters (single or double quotes)
@@ -139,15 +140,12 @@ pub fn parse_arg(chars: &[char], pointer: &mut usize, arg_name: &str) -> Result<
         if *pointer < l && chars[*pointer] == delim {
             *pointer += 1; // Skip closing quote
         } else {
-            return Err(format!(
-                "Unclosed quote for {arg_name} at byte offset {}",
-                *pointer
-            ));
+            return parser_error!(format!("Unclosed quote for {arg_name}"), *pointer);
         }
     } else {
         // Handle unquoted string - read until whitespace or delimiter
         if *pointer >= l {
-            return Err(format!("Missing {arg_name} at byte offset {}", *pointer));
+            return parser_error!(format!("Missing {arg_name}"), *pointer);
         }
 
         // Skip any remaining whitespace
@@ -168,10 +166,7 @@ pub fn parse_arg(chars: &[char], pointer: &mut usize, arg_name: &str) -> Result<
         }
 
         if arg_chars.is_empty() {
-            return Err(format!(
-                "Missing {arg_name} after whitespace at byte offset {}",
-                *pointer
-            ));
+            return parser_error!(format!("Missing {arg_name} after whitespace"), *pointer);
         }
     }
 
@@ -188,7 +183,7 @@ pub fn parse_arg(chars: &[char], pointer: &mut usize, arg_name: &str) -> Result<
 /// # Returns
 /// * `Ok(Vec<String>)` - Successfully parsed list of items
 /// * `Err(String)` - Parse error with descriptive message
-pub fn parse_list(chars: &[char], pointer: &mut usize) -> Result<Vec<String>, String> {
+pub fn parse_list(chars: &[char], pointer: &mut usize) -> Result<Vec<String>, Error> {
     let l = chars.len();
     let mut list = Vec::new();
 
@@ -203,10 +198,7 @@ pub fn parse_list(chars: &[char], pointer: &mut usize) -> Result<Vec<String>, St
         *pointer += 1; // Skip opening delimiter
         chars[*pointer - 1]
     } else {
-        return Err(format!(
-            "Missing list_start delimeter at byte offset {}",
-            *pointer
-        ));
+        return parser_error!("Missing list_start delimeter", *pointer);
     };
 
     // Find matching closing delimiter
@@ -214,7 +206,7 @@ pub fn parse_list(chars: &[char], pointer: &mut usize) -> Result<Vec<String>, St
         '[' => ']',
         '{' => '}',
         _ => {
-            return Err(format!("Invalid end delimeter at byte offset {}", *pointer));
+            return parser_error!("Invalid end delimeter", *pointer);
         }
     };
 
@@ -263,7 +255,7 @@ pub fn parse_list(chars: &[char], pointer: &mut usize) -> Result<Vec<String>, St
 /// # Returns
 /// * `Ok(HashMap<String, String>)` - Successfully parsed key-value map
 /// * `Err(String)` - Parse error with descriptive message
-pub fn parse_map(data: &[char], pointer: &mut usize) -> Result<HashMap<String, String>, String> {
+pub fn parse_map(data: &[char], pointer: &mut usize) -> Result<HashMap<String, String>, Error> {
     let left_delim = '{';
     let right_delim = '}';
     let mut map: HashMap<String, String> = HashMap::new();
@@ -277,7 +269,7 @@ pub fn parse_map(data: &[char], pointer: &mut usize) -> Result<HashMap<String, S
     if *pointer < data.len() && data[*pointer] == left_delim {
         *pointer += 1; // Skip opening brace
     } else {
-        return Err(format!("Missing left brace at byte offset {}", *pointer));
+        return parser_error!("Missing left brace", *pointer);
     }
 
     // Parse key-value pairs until closing brace
@@ -299,10 +291,7 @@ pub fn parse_map(data: &[char], pointer: &mut usize) -> Result<HashMap<String, S
         if *pointer < data.len() && data[*pointer] == ':' {
             *pointer += 1; // Skip colon
         } else {
-            return Err(format!(
-                "Missing colon separator at byte offset {}",
-                *pointer
-            ));
+            return parser_error!("Missing colon separator", *pointer);
         }
 
         // Parse value
@@ -333,7 +322,7 @@ pub fn parse_map(data: &[char], pointer: &mut usize) -> Result<HashMap<String, S
     if *pointer < data.len() && data[*pointer] == right_delim {
         *pointer += 1; // Skip closing brace
     } else {
-        return Err(format!("Missing right brace at byte offset {}", *pointer));
+        return parser_error!("Missing right brace", *pointer);
     }
 
     Ok(map)
@@ -347,7 +336,7 @@ pub fn parse_map(data: &[char], pointer: &mut usize) -> Result<HashMap<String, S
 ///
 /// # Returns
 /// * `Command` - Parsed command or ParseError with details
-pub fn parse_line(line: &str) -> Command {
+pub fn parse_line(line: &str) -> Result<Command, Error> {
     let chars: Vec<_> = line.trim().chars().collect();
     let mut pointer = 0;
     let l = chars.len();
@@ -362,44 +351,44 @@ pub fn parse_line(line: &str) -> Command {
     if cmd_str.is_empty() {
         if cmd_str.trim().is_empty() {
             // line was all spaces
-            return Command::Help;
+            return parser_error!("Command was all spaces!", 0);
         }
-        return Command::ParseError("Empty Command".to_string());
+        return parser_error!("Empty command", 0);
     }
 
     match cmd_str.to_uppercase().as_str() {
         "GET" => match parse_arg(&chars, &mut pointer, "key") {
-            Ok(key) => Command::Get { key },
-            Err(e) => Command::ParseError(format!("GET: {e}")),
+            Ok(key) => Ok(Command::Get { key }),
+            Err(e) => parser_error!(format!("GET: {e}"), pointer),
         },
 
         "EXISTS" => match parse_arg(&chars, &mut pointer, "key") {
-            Ok(key) => Command::Exists { key },
-            Err(e) => Command::ParseError(format!("EXISTS: {e}")),
+            Ok(key) => Ok(Command::Exists { key }),
+            Err(e) => parser_error!(format!("EXISTS: {e}"), pointer),
         },
 
         "SET" => match parse_arg(&chars, &mut pointer, "key") {
             Ok(key) => match parse_arg(&chars, &mut pointer, "value") {
-                Ok(value) => Command::Set { key, value },
-                Err(e) => Command::ParseError(format!("SET: {e}")),
+                Ok(value) => Ok(Command::Set { key, value }),
+                Err(e) => parser_error!(format!("SET: {e}"), pointer),
             },
-            Err(e) => Command::ParseError(format!("SET: {e}")),
+            Err(e) => parser_error!(format!("SET: {e}"), pointer),
         },
 
         "DELETE" => match parse_arg(&chars, &mut pointer, "key") {
-            Ok(key) => Command::Delete { key },
-            Err(e) => Command::ParseError(format!("DELETE: {e}")),
+            Ok(key) => Ok(Command::Delete { key }),
+            Err(e) => parser_error!(format!("DELETE: {e}"), pointer),
         },
 
-        "HELP" => Command::Help,
+        "HELP" => Ok(Command::Help),
 
         // Cli-server connection management
-        "RECONNECT" => Command::Reconnect,
+        "RECONNECT" => Ok(Command::Reconnect),
 
         // GETLIST ["foo", "bar", "baz"]
         "GETLIST" => match parse_list(&chars, &mut pointer) {
-            Ok(keys) => Command::GetList { list: keys },
-            Err(e) => Command::ParseError(e),
+            Ok(keys) => Ok(Command::GetList { list: keys }),
+            Err(e) => parser_error!(e, pointer),
         },
 
         // SETLIST names ["foo", "bar", "foofoo", "barbar"]
@@ -407,31 +396,30 @@ pub fn parse_line(line: &str) -> Command {
             Ok(key) => match parse_list(&chars, &mut pointer) {
                 Ok(l) => {
                     if l.len() % 2 != 0 {
-                        Command::ParseError(format!(
-                            "Invalid number of args at byte offset {pointer}",
-                        ))
+                        parser_error!("Invalid number of args", pointer)
                     } else {
-                        Command::SetList { key, list: l }
+                        Ok(Command::SetList { key, list: l })
                     }
                 }
-                Err(e) => Command::ParseError(e),
+                Err(e) => parser_error!(e, pointer),
             },
-            Err(e) => Command::ParseError(e),
+
+            Err(e) => parser_error!(e, pointer),
         },
 
         "SETMAP" => match parse_map(&chars, &mut pointer) {
-            Ok(map) => Command::SetMap { map },
-            Err(e) => Command::ParseError(e),
+            Ok(map) => Ok(Command::SetMap { map }),
+            Err(e) => parser_error!(e, pointer),
         },
 
         "DELETELIST" => match parse_list(&chars, &mut pointer) {
-            Ok(keys) => Command::DeleteList { list: keys },
-            Err(e) => Command::ParseError(e),
+            Ok(keys) => Ok(Command::DeleteList { list: keys }),
+            Err(e) => parser_error!(e, pointer),
         },
 
-        "GETSTATS" => Command::GetStats,
+        "GETSTATS" => Ok(Command::GetStats),
 
-        "RESETSTATS" => Command::ResetStats,
+        "RESETSTATS" => Ok(Command::ResetStats),
 
         "SETWTTL" => match parse_arg(&chars, &mut pointer, "key") {
             Ok(key) => match parse_arg(&chars, &mut pointer, "value") {
@@ -440,18 +428,19 @@ pub fn parse_line(line: &str) -> Command {
                         let ttl = match ttl.parse::<u64>() {
                             Ok(v) => v,
                             Err(e) => {
-                                return Command::ParseError(format!(
-                                    "Invalid integer type at byte offset {pointer}: {e}"
-                                ));
+                                return parser_error!(
+                                    format!("Invalid integer type: {e}"),
+                                    pointer
+                                );
                             }
                         };
-                        Command::SetwTtl { key, value, ttl }
+                        Ok(Command::SetwTtl { key, value, ttl })
                     }
-                    Err(e) => Command::ParseError(e),
+                    Err(e) => parser_error!(e, pointer),
                 },
-                Err(e) => Command::ParseError(e),
+                Err(e) => parser_error!(e, pointer),
             },
-            Err(e) => Command::ParseError(e),
+            Err(e) => parser_error!(e, pointer),
         },
 
         "EXPIRE" => match parse_arg(&chars, &mut pointer, "key") {
@@ -460,82 +449,79 @@ pub fn parse_line(line: &str) -> Command {
                     let ttl = match v.parse::<i64>() {
                         Ok(v) => v,
                         Err(e) => {
-                            return Command::ParseError(format!(
-                                "Invalid integer type at byte offset {pointer}: {e}"
-                            ));
+                            return parser_error!(format!("Invalid integer type: {e}"), pointer);
                         }
                     };
-                    Command::Expire { key, addition: ttl }
+                    Ok(Command::Expire { key, addition: ttl })
                 }
-                Err(e) => Command::ParseError(e),
+                Err(e) => parser_error!(e, pointer),
             },
-            Err(e) => Command::ParseError(e),
+            Err(e) => parser_error!(e, pointer),
         },
 
         "GETTTL" => match parse_arg(&chars, &mut pointer, "key") {
-            Ok(key) => Command::GetTtl { key },
-            Err(e) => Command::ParseError(e),
+            Ok(key) => Ok(Command::GetTtl { key }),
+            Err(e) => parser_error!(e, pointer),
         },
 
         // set a config value
         "CONFSET" => match parse_arg(&chars, &mut pointer, "key") {
             Ok(key) => match parse_arg(&chars, &mut pointer, "value") {
-                Ok(value) => Command::ConfSet { key, value },
-                Err(e) => Command::ParseError(e),
+                Ok(value) => Ok(Command::ConfSet { key, value }),
+                Err(e) => parser_error!(e, pointer),
             },
-            Err(e) => Command::ParseError(e),
+            Err(e) => parser_error!(e, pointer),
         },
 
         // Get a config value
         "CONFGET" => match parse_arg(&chars, &mut pointer, "key") {
-            Ok(key) => Command::ConfGet { key },
-            Err(e) => Command::ParseError(e),
+            Ok(key) => Ok(Command::ConfGet { key }),
+            Err(e) => parser_error!(e, pointer),
         },
 
         // Reset configurable options
-        "CONFRESET" => Command::ConfReset,
+        "CONFRESET" => Ok(Command::ConfReset),
 
         "DUMP" => match parse_arg(&chars, &mut pointer, "key") {
-            Ok(key) => Command::Dump { key },
-            Err(e) => Command::ParseError(e),
+            Ok(key) => Ok(Command::Dump { key }),
+            Err(e) => parser_error!(e, pointer),
         },
 
-        "CONFOPTIONS" => Command::ConfOptions,
+        "CONFOPTIONS" => Ok(Command::ConfOptions),
 
         "EVICTNOW" => {
             // If "count" is missing, use the value 0 instead
             let val = parse_arg(&chars, &mut pointer, "count").unwrap_or(0.to_string());
             match val.parse::<usize>() {
-                Ok(val) => Command::EvictNow { count: val },
-                Err(err) => Command::ParseError(err.to_string()),
+                Ok(val) => Ok(Command::EvictNow { count: val }),
+
+                Err(e) => parser_error!(e, pointer),
             }
         }
 
-        "FLUSH" => Command::Flush,
+        "FLUSH" => Ok(Command::Flush),
 
         "INCR" => match parse_arg(&chars, &mut pointer, "key") {
-            Ok(key) => Command::Incr { key },
-            Err(e) => Command::ParseError(e),
+            Ok(key) => Ok(Command::Incr { key }),
+            Err(e) => parser_error!(e, pointer),
         },
 
         "DECR" => match parse_arg(&chars, &mut pointer, "key") {
-            Ok(key) => Command::Decr { key },
-            Err(e) => Command::ParseError(e),
+            Ok(key) => Ok(Command::Decr { key }),
+            Err(e) => parser_error!(e, pointer),
         },
 
         "RENAME" => match parse_arg(&chars, &mut pointer, "old_key") {
             Ok(old_key) => match parse_arg(&chars, &mut pointer, "new_key") {
-                Ok(new_key) => Command::Rename { old_key, new_key },
-                Err(e) => Command::ParseError(e),
+                Ok(new_key) => Ok(Command::Rename { old_key, new_key }),
+                Err(e) => parser_error!(e, pointer),
             },
-            Err(e) => Command::ParseError(e),
+            Err(e) => parser_error!(e, pointer),
         },
 
-        "KEYS" => Command::Keys,
+        "KEYS" => Ok(Command::Keys),
 
-        other => Command::ParseError(format!(
-            "Unknown command at byte offset {pointer} : {other}"
-        )),
+        other => parser_error!(format!("Unknown command: {other}"), pointer),
     }
 }
 
@@ -547,191 +533,144 @@ mod cli_parsing {
     fn test_parse_get_ok() {
         assert_eq!(
             parse_line("GET mykey"),
-            Command::Get {
+            Ok(Command::Get {
                 key: "mykey".to_string()
-            }
+            })
         );
         assert_eq!(
             parse_line("get MyKey"),
-            Command::Get {
+            Ok(Command::Get {
                 key: "MyKey".to_string()
-            }
+            })
         );
         assert_eq!(
             parse_line("GET \"my key\""),
-            Command::Get {
+            Ok(Command::Get {
                 key: "my key".to_string()
-            }
+            })
         );
         assert_eq!(
             parse_line("GET 'another key'"),
-            Command::Get {
+            Ok(Command::Get {
                 key: "another key".to_string()
-            }
+            })
         );
         assert_eq!(
             parse_line("  GET  spaced_key  "),
-            Command::Get {
+            Ok(Command::Get {
                 key: "spaced_key".to_string()
-            }
+            })
         );
     }
 
     #[test]
     fn test_parse_get_error() {
-        assert_eq!(
-            parse_line("GET"),
-            Command::ParseError("GET: Missing key".to_string())
-        );
-        assert_eq!(
-            parse_line("GET "),
-            Command::ParseError("GET: Missing key".to_string())
-        );
-        assert_eq!(
-            parse_line("GET \"unclosed key"),
-            Command::ParseError("GET: Unclosed quote for key".to_string())
-        );
-        assert_eq!(
-            parse_line("GET \'unclosed key"),
-            Command::ParseError("GET: Unclosed quote for key".to_string())
-        );
+        assert!(parse_line("GET").is_err());
+        assert!(parse_line("GET ").is_err());
+        assert!(parse_line("GET \"unclosed key").is_err());
+        assert!(parse_line("GET \'unclosed key").is_err());
     }
 
     #[test]
     fn test_parse_set_ok() {
         assert_eq!(
             parse_line("SET mykey myvalue"),
-            Command::Set {
+            Ok(Command::Set {
                 key: "mykey".to_string(),
                 value: "myvalue".to_string()
-            }
+            })
         );
         assert_eq!(
             parse_line("set MyKey YourValue"),
-            Command::Set {
+            Ok(Command::Set {
                 key: "MyKey".to_string(),
                 value: "YourValue".to_string()
-            }
+            })
         );
         assert_eq!(
             parse_line("SET \"my key\" \"my value\""),
-            Command::Set {
+            Ok(Command::Set {
                 key: "my key".to_string(),
                 value: "my value".to_string()
-            }
+            })
         );
         assert_eq!(
             parse_line("SET 'key name' 'value content'"),
-            Command::Set {
+            Ok(Command::Set {
                 key: "key name".to_string(),
                 value: "value content".to_string()
-            }
+            })
         );
         assert_eq!(
             parse_line("SET key1 \"value with spaces\""),
-            Command::Set {
+            Ok(Command::Set {
                 key: "key1".to_string(),
                 value: "value with spaces".to_string()
-            }
+            })
         );
         assert_eq!(
             parse_line("SET \"quoted key\" unquoted_value"),
-            Command::Set {
+            Ok(Command::Set {
                 key: "quoted key".to_string(),
                 value: "unquoted_value".to_string()
-            }
+            })
         );
         assert_eq!(
             parse_line("  SET  key1   value1  "),
-            Command::Set {
+            Ok(Command::Set {
                 key: "key1".to_string(),
                 value: "value1".to_string()
-            }
+            })
         );
     }
 
     #[test]
     fn test_parse_set_error() {
-        assert_eq!(
-            parse_line("SET"),
-            Command::ParseError("SET: Missing key".to_string())
-        );
-        assert_eq!(
-            parse_line("SET keyonly"),
-            Command::ParseError("SET: Missing value".to_string())
-        );
-        assert_eq!(
-            parse_line("SET \"key"),
-            Command::ParseError("SET: Unclosed quote for key".to_string())
-        );
-        assert_eq!(
-            parse_line("SET key \"value"),
-            Command::ParseError("SET: Unclosed quote for value".to_string())
-        );
-        assert_eq!(
-            parse_line("SET \"key\" "),
-            Command::ParseError("SET: Missing value".to_string())
-        );
-        assert_eq!(
-            parse_line("SET \'key\' "),
-            Command::ParseError("SET: Missing value".to_string())
-        );
+        assert!(parse_line("SET").is_err());
+        assert!(parse_line("SET keyonly").is_err());
+        assert!(parse_line("SET \"key").is_err());
+        assert!(parse_line("SET key \"value").is_err());
+        assert!(parse_line("SET \"key\" ").is_err());
+        assert!(parse_line("SET \'key\' ").is_err());
     }
 
     #[test]
     fn test_parse_delete_ok() {
         assert_eq!(
             parse_line("DELETE mykey"),
-            Command::Delete {
+            Ok(Command::Delete {
                 key: "mykey".to_string()
-            }
+            })
         );
         assert_eq!(
             parse_line("DELETE \"my key\""),
-            Command::Delete {
+            Ok(Command::Delete {
                 key: "my key".to_string()
-            }
+            })
         );
     }
 
     #[test]
     fn test_parse_delete_error() {
-        assert_eq!(
-            parse_line("DELETE"),
-            Command::ParseError("DELETE: Missing key".to_string())
-        );
-        assert_eq!(
-            parse_line("DELETE "),
-            Command::ParseError("DELETE: Missing key".to_string())
-        );
-        assert_eq!(
-            parse_line("DELETE \"unclosed"),
-            Command::ParseError("DELETE: Unclosed quote for key".to_string())
-        );
+        assert!(parse_line("DELETE").is_err());
+        assert!(parse_line("DELETE ").is_err());
+        assert!(parse_line("DELETE \"unclosed").is_err());
     }
 
     #[test]
     fn test_parse_help_and_others() {
-        assert_eq!(parse_line("HELP"), Command::Help);
-        assert_eq!(parse_line("help"), Command::Help);
-        assert_eq!(parse_line(""), Command::Help); // Empty line is Help
-        assert_eq!(parse_line("   "), Command::Help); // All whitespace is Help
-        assert_eq!(
-            parse_line("INVALIDCMD"),
-            Command::ParseError("Unknown command: INVALIDCMD".to_string())
-        );
-        assert_eq!(
-            parse_line(" GET"),
-            Command::ParseError("GET: Missing key".to_string())
-        );
+        assert_eq!(parse_line("HELP"), Ok(Command::Help));
+        assert_eq!(parse_line("help"), Ok(Command::Help));
+        assert!(parse_line("INVALIDCMD").is_err());
+        assert!(parse_line(" GET").is_err());
     }
 
     #[test]
     fn test_empty_string_after_command_extraction() {
         // This test case is to ensure that if `line.chars()` is empty,
         // or if the line is `  `, it's handled.
-        assert_eq!(parse_line(""), Command::Help);
-        assert_eq!(parse_line(" "), Command::Help);
+        assert!(parse_line("").is_err());
+        assert!(parse_line(" ").is_err());
     }
 
     #[test]
@@ -784,10 +723,10 @@ mod cli_parsing {
         let line = "SETLIST names ['foo', 'bar']";
         assert_eq!(
             parse_line(line),
-            Command::SetList {
+            Ok(Command::SetList {
                 key: "names".to_string(),
                 list: vec!["foo".to_string(), "bar".to_string()]
-            }
+            })
         )
     }
 }

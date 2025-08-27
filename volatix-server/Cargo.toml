@@ -1,5 +1,5 @@
 [package]
-name = "server"
+name = "libvolatix"
 version = "0.1.0"
 edition = "2024"
 
@@ -13,9 +13,9 @@ parking_lot = {workspace =true}
 serde = { workspace = true}
 tokio = {workspace = true}
 
-[[bin]]
-name = "server"
-path = "src/main.rs"
+# [[bin]]
+# name = "server"
+# path = "src/main.rs"
 
 [lib]
 name = "libvolatix"

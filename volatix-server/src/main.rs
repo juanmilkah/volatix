@@ -88,7 +88,7 @@ async fn main() -> anyhow::Result<()> {
     // Intialise storage data
     let options = StorageOptions::default();
     let storage = Arc::new(parking_lot::RwLock::new(LockedStorage::new(options)));
-    let persistent_path = get_persistent_path("volatix.db")?;
+    let persistent_path = get_persistent_path(".volatix.bin")?;
     {
         // avoid deadlock
         storage.write().load_from_disk(&persistent_path)?;

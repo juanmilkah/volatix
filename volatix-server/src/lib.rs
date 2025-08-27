@@ -36,11 +36,13 @@
  */
 
 // Re-export all public APIs from the modules
+pub mod error;
 pub mod process;
 pub mod resp3;
 pub mod storage;
 
 // Make common types available at the crate root
+pub use error::*;
 pub use process::*;
 pub use resp3::*;
 pub use storage::*;
