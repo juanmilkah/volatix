@@ -133,9 +133,13 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    println!("Saving data to disk...");
-    storage.read().save_to_disk(&persistent_path)?;
-    println!("Data saved successfully.");
+    if storage.read().should_flush() {
+        println!("Saving data to disk...");
+        storage.read().save_to_disk(&persistent_path)?;
+        // This flag is reset at the start of next session
+        // storage.write().toggle_dirty_flag();
+        println!("Data saved successfully.");
+    }
 
     Ok(())
 }
