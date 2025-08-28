@@ -287,8 +287,7 @@ pub fn process_request(
                     array_response(&keys)
                 }
 
-                // Unknown single commands return null
-                _ => bulk_error_response("Unknown single command!"),
+                other => bulk_error_response(&format!("Unknown single command: {other}!")),
             }
         }
 

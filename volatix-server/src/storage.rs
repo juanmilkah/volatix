@@ -1,5 +1,6 @@
 use std::{
-    collections::HashMap,
+    cmp::Reverse,
+    collections::{BinaryHeap, HashMap},
     fmt::Display,
     fs::{File, OpenOptions},
     io::{self, BufReader, BufWriter, Read, Write},
@@ -800,10 +801,11 @@ impl LockedStorage {
     /// Performs eviction based on the configured eviction policy.
     /// First removes expired entries, then applies the eviction policy.
     /// If the specified count is greater than or equal to the
-    /// `Self::entry_count()` the storage is flushed.
+    /// [`Self::entry_count`] the storage is flushed.
     /// If count is zero, 10% of total entries is evicted.
     pub fn evict_entries(&mut self, count: usize) {
-        if count >= self.entry_count() {
+        let s = self.entry_count();
+        if count >= s {
             self.flush();
             return;
         }
@@ -811,87 +813,82 @@ impl LockedStorage {
         self.remove_expired();
 
         let count = if count == 0 {
-            (10.0 / 100.0 * self.entry_count() as f64).ceil() as usize
+            (10.0 / 100.0 * s as f64).ceil() as usize
         } else {
             count
         };
 
+        let oldest_metric = |_k: &String, v: &StorageEntry| v.created_at;
+        let lru_metric = |_k: &String, v: &StorageEntry| v.last_accessed;
+        let lfu_metric = |_k: &String, v: &StorageEntry| v.access_count;
+        let largest_metric = |_k: &String, v: &StorageEntry| v.entry_size;
+
         match self.options.eviction_policy {
-            EvictionPolicy::Oldest => self.remove_n_oldest_entries(count),
-            EvictionPolicy::LRU => self.remove_n_lru_entries(count),
-            EvictionPolicy::LFU => self.remove_n_lfu_entries(count),
-            EvictionPolicy::SizeAware => self.remove_n_largest_entries(count),
+            EvictionPolicy::Oldest => self.remove_n_entries(count, oldest_metric),
+            EvictionPolicy::LRU => self.remove_n_entries(count, lru_metric),
+            EvictionPolicy::LFU => self.remove_n_entries(count, lfu_metric),
+            EvictionPolicy::SizeAware => self.remove_n_largest_entries(count, largest_metric),
         }
     }
 
+    /// Removes the least n entries by a metric.
     /// Removes the least recently used n entries (LRU eviction policy).
-    pub fn remove_n_lru_entries(&mut self, n: usize) {
-        let mut vals = self
-            .store
-            .read()
-            .iter()
-            .map(|(k, v)| (k.clone(), v.last_accessed))
-            .collect::<Vec<_>>();
-
-        // The least recently used has the lowest value
-        vals.sort_by_key(|(_, v)| *v);
-        let mut vals = vals.into_iter().map(|(k, _)| k).collect::<Vec<_>>();
-        vals.truncate(n);
-
-        self.remove_entries(&vals);
-        self.stats.evictions.fetch_add(n, Ordering::Relaxed);
-    }
-
     /// Removes the least frequently used n entries (LFU eviction policy).
-    pub fn remove_n_lfu_entries(&mut self, n: usize) {
-        let mut vals = self
-            .store
-            .read()
-            .iter()
-            .map(|(k, v)| (k.clone(), v.access_count))
-            .collect::<Vec<_>>();
-
-        vals.sort_by_key(|(_, v)| *v);
-        let mut vals = vals.into_iter().map(|(k, _)| k).collect::<Vec<_>>();
-        vals.truncate(n);
-
-        self.remove_entries(&vals);
+    /// Removes the oldest n entries by their creation time (Oldest eviction policy).
+    pub fn remove_n_entries<F, M>(&mut self, n: usize, mut metric: F)
+    where
+        M: Ord + Copy,
+        F: FnMut(&String, &StorageEntry) -> M,
+    {
+        let mut heap: BinaryHeap<(M, String)> = BinaryHeap::new();
+        {
+            let store = self.store.read();
+            for (k, v) in store.iter() {
+                let m = metric(k, v);
+                if heap.len() < n {
+                    heap.push((m, k.clone()));
+                } else if let Some((top_m, _)) = heap.peek()
+                    && m < *top_m
+                // Keep smallest by metric
+                {
+                    heap.pop();
+                    heap.push((m, k.clone()));
+                }
+            }
+        }
+        let keys = heap.into_iter().map(|(_, k)| k).collect::<Vec<String>>();
+        self.remove_entries(&keys);
         self.stats.evictions.fetch_add(n, Ordering::Relaxed);
     }
 
     /// Removes the largest n entries by their size (Size-aware eviction policy).
-    pub fn remove_n_largest_entries(&mut self, n: usize) {
-        let mut vals = self
-            .store
-            .read()
-            .iter()
-            .map(|(k, v)| (k.clone(), v.entry_size))
-            .collect::<Vec<_>>();
-
-        // Sort in reverse order
-        vals.sort_by(|(_, v1), (_, v2)| v2.cmp(v1));
-        let mut vals = vals.into_iter().map(|(k, _)| k).collect::<Vec<_>>();
-        vals.truncate(n);
-
-        self.remove_entries(&vals);
-        self.stats.evictions.fetch_add(n, Ordering::Relaxed);
-    }
-
-    /// Removes the oldest n entries by their creation time (Oldest eviction policy).
-    fn remove_n_oldest_entries(&mut self, n: usize) {
-        let mut vals = self
-            .store
-            .read()
-            .iter()
-            .map(|(k, v)| (k.clone(), v.created_at))
-            .collect::<Vec<_>>();
-
-        // The oldest element has the least created_at value
-        vals.sort_by_key(|(_, v)| *v);
-        let mut vals = vals.into_iter().map(|(k, _)| k).collect::<Vec<_>>();
-        vals.truncate(n);
-
-        self.remove_entries(&vals);
+    pub fn remove_n_largest_entries<F, M>(&mut self, n: usize, mut metric: F)
+    where
+        M: Ord + Copy,
+        F: FnMut(&String, &StorageEntry) -> M,
+    {
+        // Min-heap
+        // 4, 5, 6, 7
+        // pop and compare 4
+        // push larger than 4
+        let mut heap = BinaryHeap::new();
+        {
+            let store = self.store.read();
+            for (k, v) in store.iter() {
+                let m = metric(k, v);
+                if heap.len() < n {
+                    heap.push((Reverse(m), k.clone()));
+                } else if let Some((top_m, _)) = heap.peek()
+                    && Reverse(m) < *top_m
+                // Keep largest by metric
+                {
+                    heap.pop();
+                    heap.push((Reverse(m), k.clone()));
+                }
+            }
+        }
+        let keys = heap.into_iter().map(|(_, k)| k).collect::<Vec<String>>();
+        self.remove_entries(&keys);
         self.stats.evictions.fetch_add(n, Ordering::Relaxed);
     }
 
