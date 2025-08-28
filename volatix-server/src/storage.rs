@@ -871,7 +871,7 @@ impl LockedStorage {
         // 4, 5, 6, 7
         // pop and compare 4
         // push larger than 4
-        let mut heap = BinaryHeap::new();
+        let mut heap: BinaryHeap<(Reverse<M>, String)> = BinaryHeap::new();
         {
             let store = self.store.read();
             for (k, v) in store.iter() {

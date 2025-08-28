@@ -14,25 +14,26 @@ cargo build --release
 ## Start server
 
 ```bash
-  cargo run --release --bin volatix-server [--threads<1..>]
+  ./target/release/volatix-server
+  [--port<u16>] [--snapshots_interval<secs>]
 ```
 
 ## Start cli repl
 
 ```bash
-  cargo run --release --bin volatix-cli
+  ./target/release/volatix-cli
 ```
 
 ## Benchmarking
 
 ```bash
-cargo run --release --bin volatix-bench \
-[--duration<secs>] [--ratio<0..1>] [--threads<1..> [--compress]]
+  ./target/release/volatix-bench 
+[--duration<secs>] [--ratio<0..1>] [--workers<1..> [--compress]]
 ```
 Defaults: 
 - 30 secs duration
 - 0.7 mixed-ratio
-- 4 cpu threads
+- 4 cpu worker threads
 - Compression disabled
 
 This project is licensed under the [MIT](LICENSE).
