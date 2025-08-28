@@ -1,5 +1,4 @@
 use std::{
-    cmp::Reverse,
     collections::{BinaryHeap, HashMap},
     fmt::Display,
     fs::{File, OpenOptions},
@@ -479,7 +478,7 @@ impl LockedStorage {
             }
         }
 
-        Some(entry.clone())
+        Some(entry)
     }
 
     /// Checks if a key exists in the cache without updating access metadata.
@@ -653,8 +652,7 @@ impl LockedStorage {
         // Check if we need to make room for this entry
         if self.is_full() {
             // Evict 10% of the entries
-            let n = (10.0 / 100.0 * self.max_capacity() as f64).ceil() as usize;
-            self.evict_entries(n);
+            self.evict_entries(0);
         }
 
         let entry_size = value.size_in_bytes();
@@ -821,13 +819,13 @@ impl LockedStorage {
         let oldest_metric = |_k: &String, v: &StorageEntry| v.created_at;
         let lru_metric = |_k: &String, v: &StorageEntry| v.last_accessed;
         let lfu_metric = |_k: &String, v: &StorageEntry| v.access_count;
-        let largest_metric = |_k: &String, v: &StorageEntry| v.entry_size;
+        let largest_metric = |_k: &String, v: &StorageEntry| -(v.entry_size as i64); // Invert the metric
 
         match self.options.eviction_policy {
             EvictionPolicy::Oldest => self.remove_n_entries(count, oldest_metric),
             EvictionPolicy::LRU => self.remove_n_entries(count, lru_metric),
             EvictionPolicy::LFU => self.remove_n_entries(count, lfu_metric),
-            EvictionPolicy::SizeAware => self.remove_n_largest_entries(count, largest_metric),
+            EvictionPolicy::SizeAware => self.remove_n_entries(count, largest_metric),
         }
     }
 
@@ -835,6 +833,7 @@ impl LockedStorage {
     /// Removes the least recently used n entries (LRU eviction policy).
     /// Removes the least frequently used n entries (LFU eviction policy).
     /// Removes the oldest n entries by their creation time (Oldest eviction policy).
+    /// Removes the largest n entries by their size (Size-aware eviction policy).
     pub fn remove_n_entries<F, M>(&mut self, n: usize, mut metric: F)
     where
         M: Ord + Copy,
@@ -853,37 +852,6 @@ impl LockedStorage {
                 {
                     heap.pop();
                     heap.push((m, k.clone()));
-                }
-            }
-        }
-        let keys = heap.into_iter().map(|(_, k)| k).collect::<Vec<String>>();
-        self.remove_entries(&keys);
-        self.stats.evictions.fetch_add(n, Ordering::Relaxed);
-    }
-
-    /// Removes the largest n entries by their size (Size-aware eviction policy).
-    pub fn remove_n_largest_entries<F, M>(&mut self, n: usize, mut metric: F)
-    where
-        M: Ord + Copy,
-        F: FnMut(&String, &StorageEntry) -> M,
-    {
-        // Min-heap
-        // 4, 5, 6, 7
-        // pop and compare 4
-        // push larger than 4
-        let mut heap: BinaryHeap<(Reverse<M>, String)> = BinaryHeap::new();
-        {
-            let store = self.store.read();
-            for (k, v) in store.iter() {
-                let m = metric(k, v);
-                if heap.len() < n {
-                    heap.push((Reverse(m), k.clone()));
-                } else if let Some((top_m, _)) = heap.peek()
-                    && Reverse(m) < *top_m
-                // Keep largest by metric
-                {
-                    heap.pop();
-                    heap.push((Reverse(m), k.clone()));
                 }
             }
         }
