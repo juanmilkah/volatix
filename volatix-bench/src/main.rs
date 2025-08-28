@@ -1,4 +1,5 @@
 use std::{
+    fs::File,
     io::{Read, Write},
     net::TcpStream,
     sync::{Arc, atomic::AtomicUsize},
@@ -7,6 +8,7 @@ use std::{
 };
 
 use clap::Parser;
+use parking_lot::RwLock;
 
 const ADDRESS: &str = "127.0.0.1:7878";
 const DEFAULT_WORKER_COUNT: usize = 4;
@@ -143,14 +145,18 @@ fn get_key() -> String {
     key
 }
 
+#[allow(clippy::type_complexity)]
 struct Config {
+    compress: bool,
+    mixed_ratio: f64,
     duration: Duration,
     operation_count: Arc<AtomicUsize>,
     error_count: Arc<AtomicUsize>,
     read_latencies: Arc<parking_lot::Mutex<Vec<Duration>>>,
     write_latencies: Arc<parking_lot::Mutex<Vec<Duration>>>,
-    mixed_ratio: f64,
-    compress: bool,
+    logs: Arc<parking_lot::Mutex<Vec<(String, Vec<Vec<u8>>)>>>,
+    keys: Arc<RwLock<Vec<String>>>,
+    values: Arc<RwLock<Vec<String>>>,
 }
 
 fn worker_thread(id: usize, config: &Config) {
@@ -162,6 +168,8 @@ fn worker_thread(id: usize, config: &Config) {
         }
     };
     let mut stream = tcp_stream;
+    let mut buffer = [0u8; 1024 * 1024];
+    let mut logs = Vec::new();
 
     // setup compression
     if config.compress {
@@ -173,34 +181,33 @@ fn worker_thread(id: usize, config: &Config) {
             .write_all(&req)
             .map_err(|err| eprintln!("Failed to enable compression: {err}"))
             .unwrap();
+        let _result = stream.read(&mut buffer);
     }
 
-    let mut buffer = [0u8; 1024];
     let start_time = Instant::now();
 
-    // pre generate some keys and values
-    let key_count = 1000;
-    let keys: Vec<_> = (0..key_count).map(|_| get_key()).collect();
+    let key_count = 100_000;
+    let vals_count = 100_000;
 
+    let mut i = 0;
     while start_time.elapsed() < config.duration {
         let op_type = if rand::random::<f64>() < config.mixed_ratio {
             // Get operation
-            let key_idx = rand::random::<u64>() % key_count;
 
             Command::Get {
-                key: keys[key_idx as usize].clone(),
+                key: config.keys.read()[i % key_count].clone(),
             }
         } else {
             // Set operation
-            let key_idx = rand::random::<u64>() % key_count;
-            let value = random_data();
             Command::Set {
-                key: keys[key_idx as usize].clone(),
-                value,
+                key: config.keys.read()[i % key_count].clone(),
+                value: config.values.read()[i % vals_count].clone(),
             }
         };
+        i += 1;
 
         let req = serialize_request(&op_type);
+        logs.push(req.clone());
 
         let op_start = Instant::now();
 
@@ -236,6 +243,7 @@ fn worker_thread(id: usize, config: &Config) {
                 config
                     .operation_count
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                logs.push(buffer[..n].to_vec());
             }
             Err(_) => {
                 config
@@ -244,6 +252,8 @@ fn worker_thread(id: usize, config: &Config) {
             }
         }
     }
+
+    config.logs.lock().push((format!("Thread {id}"), logs));
 }
 
 #[derive(Debug, Parser)]
@@ -290,9 +300,17 @@ fn main() {
     let read_latencies = Arc::new(parking_lot::Mutex::new(Vec::new()));
     let write_latencies = Arc::new(parking_lot::Mutex::new(Vec::new()));
 
-    let mut handles = Vec::new();
+    // pre generate some keys and values
+    println!("Generating data!");
+    let key_count = 100_000;
+    let vals_count = 100_000;
+    let keys: Vec<_> = (0..key_count).map(|_| get_key()).collect();
+    let values: Vec<_> = (0..vals_count).map(|_| random_data()).collect();
+    let keys = Arc::new(RwLock::new(keys));
+    let values = Arc::new(RwLock::new(values));
 
-    let start_time = Instant::now();
+    let mut handles = Vec::new();
+    let logs = Arc::new(parking_lot::Mutex::new(Vec::new()));
 
     //create and start worker threads
     for i in 0..thread_count {
@@ -308,6 +326,9 @@ fn main() {
             write_latencies: write_lats,
             mixed_ratio,
             compress,
+            logs: Arc::clone(&logs),
+            keys: Arc::clone(&keys),
+            values: Arc::clone(&values),
         };
 
         let handle = thread::spawn(move || worker_thread(i, &config));
@@ -315,6 +336,7 @@ fn main() {
     }
 
     // show progress
+    let start_time = Instant::now();
     let progress_interval = Duration::from_secs(1);
     let mut last_ops = 0;
 
@@ -335,7 +357,7 @@ fn main() {
 
     // wait for threads
     for handle in handles {
-        handle.join().unwrap();
+        handle.join().unwrap()
     }
 
     let total_time = start_time.elapsed();
@@ -393,4 +415,32 @@ fn main() {
     if tcp_stream.write_all(&cmd).is_err() {
         eprintln!("Cleanup failed!");
     }
+
+    let mut s_logs = String::new();
+    for (thread, logs) in logs.lock().iter() {
+        let mut lines = Vec::new();
+        for line in logs {
+            let line = String::from_utf8_lossy(line).to_string();
+            let line = line.replace("\r\n", "__");
+
+            lines.push(line);
+        }
+        let mut s = String::new();
+        s.push_str(thread);
+        s.push('\n');
+        s.push_str(&lines.join("\n"));
+        s.push('\n');
+
+        s_logs.push_str(&s);
+    }
+
+    let mut f = File::options()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open("bench_logs")
+        .unwrap();
+    println!("Writing logs to `bench_logs`");
+
+    File::write(&mut f, s_logs.as_bytes()).unwrap();
 }

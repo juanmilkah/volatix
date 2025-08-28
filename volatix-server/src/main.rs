@@ -21,7 +21,7 @@ async fn handle_client(
 ) {
     // pre-allocating a higher value may lead to
     // the tokio worker overflowing it's stack
-    let mut buffer = [0; 1024];
+    let mut buffer = [0; 1024 * 14];
 
     loop {
         match stream.read(&mut buffer).await {
