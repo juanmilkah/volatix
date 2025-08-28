@@ -28,7 +28,7 @@ cargo build --release
 
 ```bash
   ./target/release/volatix-bench 
-[--duration<secs>] [--ratio<0..1>] [--workers<1..> [--compress]]
+[--duration<secs>] [--ratio<0..1>] [--workers<1..>] [--compress]
 ```
 Defaults: 
 - 30 secs duration
