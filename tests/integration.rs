@@ -5,7 +5,7 @@ mod integration {
         net::{SocketAddr, TcpStream},
     };
 
-    use libvolatix::{RequestType, bulk_string_response, parse_request};
+    use libvolatix::{RequestType, bulkstring, parse_request};
     const BUFFER_SIZE: usize = 1024;
 
     macro_rules! bstring {
@@ -158,7 +158,7 @@ mod integration {
         let addr: SocketAddr = "127.0.0.1:7878".parse().unwrap();
         let mut stream = TcpStream::connect(addr).unwrap();
 
-        let handshake_message = bulk_string_response(Some("HELLO"));
+        let handshake_message = bulkstring!(Some("HELLO"));
 
         stream.write_all(&handshake_message).unwrap();
 
@@ -208,9 +208,9 @@ mod integration {
         let addr: SocketAddr = "127.0.0.1:7878".parse().unwrap();
         let stream = TcpStream::connect(addr).unwrap();
 
-        let setlist_req = setlist!("SETLIST", "foo", "bar", "baz");
-        let getlist_req = array!("GETLIST", "foo", "bar");
-        let deletelist_req = array!("DELETELIST", "foo", "bar");
+        let setlist_req = setlist!("SETLIST", "food", "bar", "baz");
+        let getlist_req = array!("GETLIST", "food", "baron");
+        let deletelist_req = array!("DELETELIST", "food");
 
         let resp = send_request(&stream, &setlist_req).unwrap();
         let success_resp = RequestType::BulkString {
@@ -224,7 +224,7 @@ mod integration {
                 RequestType::Array {
                     children: vec![
                         RequestType::BulkString {
-                            data: b"foo".to_vec(),
+                            data: b"food".to_vec(),
                         },
                         RequestType::Array {
                             children: vec![
@@ -241,7 +241,7 @@ mod integration {
                 RequestType::Array {
                     children: vec![
                         RequestType::BulkString {
-                            data: b"bar".to_vec(),
+                            data: b"baron".to_vec(),
                         },
                         RequestType::Null,
                     ],

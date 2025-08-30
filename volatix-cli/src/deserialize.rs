@@ -79,6 +79,10 @@ fn de_inner_response(resp: &RequestType) -> Result<Response, String> {
             Ok(Response::Array { data: outer_vec })
         }
 
+        RequestType::Map { children: _ } => {
+            unimplemented!("will think about this!")
+        }
+
         _ => Err("Unexpected response type".into()),
     }
 }
