@@ -371,26 +371,26 @@ fn read_line(prompt: &str, history: &mut History) -> Result<String, String> {
                 }
 
                 event::KeyCode::Esc => return Err("EXIT".to_string()),
-
                 // FIX: Handle this later
-                event::KeyCode::Home => todo!(),
-                event::KeyCode::End => todo!(),
-                event::KeyCode::PageUp => todo!(),
-                event::KeyCode::PageDown => todo!(),
-                event::KeyCode::Tab => todo!(),
-                event::KeyCode::BackTab => todo!(),
-                event::KeyCode::Insert => todo!(),
-                event::KeyCode::F(_) => todo!(),
-                event::KeyCode::Null => todo!(),
-                event::KeyCode::CapsLock => todo!(),
-                event::KeyCode::ScrollLock => todo!(),
-                event::KeyCode::NumLock => todo!(),
-                event::KeyCode::PrintScreen => todo!(),
-                event::KeyCode::Pause => todo!(),
-                event::KeyCode::Menu => todo!(),
-                event::KeyCode::KeypadBegin => todo!(),
-                event::KeyCode::Media(_media_key_code) => todo!(),
-                event::KeyCode::Modifier(_modifier_key_code) => todo!(),
+                // event::KeyCode::Home => {}
+                // event::KeyCode::End => {}
+                // event::KeyCode::PageUp => todo!(),
+                // event::KeyCode::PageDown => todo!(),
+                // event::KeyCode::Tab => todo!(),
+                // event::KeyCode::BackTab => todo!(),
+                // event::KeyCode::Insert => todo!(),
+                // event::KeyCode::F(_) => todo!(),
+                // event::KeyCode::Null => todo!(),
+                // event::KeyCode::CapsLock => todo!(),
+                // event::KeyCode::ScrollLock => todo!(),
+                // event::KeyCode::NumLock => todo!(),
+                // event::KeyCode::PrintScreen => todo!(),
+                // event::KeyCode::Pause => todo!(),
+                // event::KeyCode::Menu => todo!(),
+                // event::KeyCode::KeypadBegin => todo!(),
+                // event::KeyCode::Media(_media_key_code) => todo!(),
+                // event::KeyCode::Modifier(_modifier_key_code) => todo!(),
+                _ => {}
             }
         }
     }
@@ -419,9 +419,9 @@ fn main() -> Result<(), String> {
     // Display welcome message and usage hints
     println!("{art}", art = ascii_art());
     println!("If stuck try `HELP`");
-    println!("To end session `QUIT` or `EXIT`");
-    println!("Press `Esc` to quit");
+    println!("To end session `QUIT` or `EXIT` or press `Esc`");
     println!("Use ↑/↓ arrows for command history");
+    println!("Some terminal functionality is missing!");
 
     let _guard = TerminalGuard::new().map_err(|err| err.to_string());
 

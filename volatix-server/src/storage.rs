@@ -206,7 +206,7 @@ pub struct StorageOptions {
 }
 
 /// Helper enum for more readable compression settings.
-#[derive(Debug)]
+#[derive(Copy, Debug, Clone)]
 pub enum Compression {
     Enabled,
     Disabled,
@@ -227,6 +227,15 @@ impl From<bool> for Compression {
             Compression::Enabled
         } else {
             Compression::Disabled
+        }
+    }
+}
+
+impl From<Compression> for bool {
+    fn from(value: Compression) -> Self {
+        match value {
+            Compression::Enabled => true,
+            Compression::Disabled => false,
         }
     }
 }
@@ -470,12 +479,9 @@ impl LockedStorage {
 
         // Handle decompression outside the lock to minimize lock time.
         // We don't want to hold an exclusive lock while doing CPU-intensive work.
-        #[allow(clippy::collapsible_if)]
-        if entry.compressed {
-            if entry.decompress().is_err() {
-                eprintln!("Entry decompression on get_entry");
-                return None;
-            }
+        if entry.compressed && entry.decompress().is_err() {
+            eprintln!("Entry decompression on get_entry");
+            return None;
         }
 
         Some(entry)
@@ -839,7 +845,7 @@ impl LockedStorage {
         M: Ord + Copy,
         F: FnMut(&String, &StorageEntry) -> M,
     {
-        let mut heap: BinaryHeap<(M, String)> = BinaryHeap::new();
+        let mut heap: BinaryHeap<(M, String)> = BinaryHeap::with_capacity(n);
         {
             let store = self.store.read();
             for (k, v) in store.iter() {
@@ -942,10 +948,7 @@ impl LockedStorage {
             ConfigEntry::GlobalTtl(t) => self.options.ttl = Duration::from_secs(*t),
             ConfigEntry::MaxCapacity(c) => self.options.max_capacity = *c,
             ConfigEntry::Compression(b) => {
-                self.options.compression = match b {
-                    Compression::Enabled => true,
-                    Compression::Disabled => false,
-                }
+                self.options.compression = <Compression as Into<bool>>::into(*b)
             }
             ConfigEntry::CompressionThreshold(s) => self.options.compression_threshold = *s,
         }

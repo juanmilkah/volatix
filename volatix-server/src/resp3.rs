@@ -100,11 +100,17 @@ pub fn storagevalue_to_string(value: &StorageValue) -> String {
     let delim = "\r\n";
     // FIX: Implement these correctly
     match value {
-        StorageValue::Int(_)
-        | StorageValue::Float(_)
-        | StorageValue::Bool(_)
-        | StorageValue::Bytes(_)
-        | StorageValue::Text(_) => {
+        StorageValue::Int(i) => format!(":{}\r\n", i),
+
+        StorageValue::Bool(b) => {
+            if *b {
+                "#t\r\n".to_string()
+            } else {
+                "#f\r\n".to_string()
+            }
+        }
+
+        StorageValue::Text(_) | StorageValue::Bytes(_) => {
             let mut v = String::new();
             v.push('$');
             v.push_str(&value.to_string().len().to_string());
@@ -114,6 +120,17 @@ pub fn storagevalue_to_string(value: &StorageValue) -> String {
 
             v
         }
+
+        // ,[<+|->]<integral>[.<fractional>][<E|e>[sign]<exponent>]\r\n
+        StorageValue::Float(d) => {
+            let mut v = String::new();
+            v.push(',');
+            v.push_str(&d.to_string());
+            v.push_str(delim);
+
+            v
+        }
+
         StorageValue::Null => "_\r\n".to_string(),
 
         StorageValue::List(storage_values) => {
