@@ -1,81 +1,104 @@
 //
 // Redis Serialization Protocol v3.0
+
 use std::collections::{HashMap, HashSet};
 
-use crate::{StorageValue, storage::StorageEntry};
+use crate::StorageValue;
 
-pub fn array_response(data: &Vec<String>) -> Vec<u8> {
-    let mut arr = String::new();
-    let delimeter = "\r\n";
+#[macro_export]
+macro_rules! array {
+    ($data:expr) => {
+        {
+            let mut arr = String::new();
+            let delimeter = "\r\n";
 
-    arr.push('*');
-    arr.push_str(&data.len().to_string());
-    arr.push_str(delimeter);
+            arr.push('*');
+            arr.push_str(&$data.len().to_string());
+            arr.push_str(delimeter);
 
-    for entry in data {
-        let mut s = String::new();
-        s.push('$');
-        s.push_str(&entry.len().to_string());
-        s.push_str(delimeter);
-        s.push_str(entry);
-        s.push_str(delimeter);
+            for entry in $data {
+                let mut s = String::new();
+                s.push('$');
+                s.push_str(&entry.len().to_string());
+                s.push_str(delimeter);
+                s.push_str(entry);
+                s.push_str(delimeter);
 
-        arr.push_str(&s);
-    }
+                arr.push_str(&s);
+            }
 
-    arr.as_bytes().to_vec()
-}
-
-pub fn bulk_string_response(data: Option<&str>) -> Vec<u8> {
-    match data {
-        Some(rsp) => {
-            let mut s = String::new();
-            s.push('$');
-            let len = rsp.len();
-            s.push_str(&len.to_string());
-            s.push_str("\r\n");
-            s.push_str(rsp);
-            s.push_str("\r\n");
-
-            s.as_bytes().to_vec()
+            arr.as_bytes().to_vec()
         }
-        None => null_response(),
     }
 }
 
-pub fn null_response() -> Vec<u8> {
-    // null $-1\r\n
-    b"$-1\r\n".to_vec()
+#[macro_export]
+macro_rules! bulkstring {
+    ($data:expr) => {
+        match $data {
+            Some(rsp) => {
+                let mut s = String::new();
+                s.push('$');
+                let len = rsp.len();
+                s.push_str(&len.to_string());
+                s.push_str("\r\n");
+                s.push_str(&rsp);
+                s.push_str("\r\n");
+
+                s.as_bytes().to_vec()
+            }
+            None => $crate::null!(),
+        }
+    };
 }
 
-pub fn bulk_error_response(err: &str) -> Vec<u8> {
-    let mut s = String::new();
-    s.push('!');
-    let len = err.len();
-    s.push_str(&len.to_string());
-    s.push_str("\r\n");
-    s.push_str(err);
-    s.push_str("\r\n");
+// null $-1\r\n
+#[macro_export]
+macro_rules! null {
+    () => {
+        b"$-1\r\n".to_vec()
+    };
+}
 
-    s.as_bytes().to_vec()
+#[macro_export]
+macro_rules! bulkerror {
+    ($err:expr) => {{
+        let mut s = String::new();
+        s.push('!');
+        let len = $err.len();
+        s.push_str(&len.to_string());
+        s.push_str("\r\n");
+        s.push_str($err);
+        s.push_str("\r\n");
+
+        s.as_bytes().to_vec()
+    }};
 }
 
 // #<t|f>\r\n
-pub fn boolean_response(b: bool) -> Vec<u8> {
-    if b {
-        b"#t\r\n".to_vec()
-    } else {
-        b"#f\r\n".to_vec()
-    }
+#[macro_export]
+macro_rules! boolean {
+    ($b:expr) => {
+        if $b {
+            b"#t\r\n".to_vec()
+        } else {
+            b"#f\r\n".to_vec()
+        }
+    };
 }
 
 // :[<+|- >]<value>\r\n
-pub fn integer_response(i: i64) -> Vec<u8> {
-    format!(":{i}\r\n").as_bytes().to_vec()
+#[macro_export]
+macro_rules! integer {
+    ($i:expr) => {
+        format!(":{}\r\n", $i).as_bytes().to_vec()
+    };
 }
 
-fn storage_value_to_string(value: &StorageValue) -> String {
+/// Convert a StorageValue to a string.
+pub fn storagevalue_to_string(value: &StorageValue) -> String {
     let delim = "\r\n";
+    // FIX: Implement these correctly
     match value {
         StorageValue::Int(_)
         | StorageValue::Float(_)
@@ -100,14 +123,8 @@ fn storage_value_to_string(value: &StorageValue) -> String {
             outer.push_str(delim);
 
             for inner in storage_values {
-                let mut v = String::new();
-                v.push('$');
-                v.push_str(&inner.to_string().len().to_string());
-                v.push_str(delim);
-                v.push_str(&inner.to_string());
-                v.push_str(delim);
-
-                outer.push_str(&v);
+                let val = storagevalue_to_string(inner);
+                outer.push_str(&val);
             }
 
             outer
@@ -126,7 +143,7 @@ fn storage_value_to_string(value: &StorageValue) -> String {
                 k.push_str(&key.to_string());
                 k.push_str(delim);
 
-                let val = storage_value_to_string(value);
+                let val = storagevalue_to_string(value);
 
                 outer.push_str(key);
                 outer.push_str(&val);
@@ -139,46 +156,51 @@ fn storage_value_to_string(value: &StorageValue) -> String {
 
 // *<number-of-elements>\r\n<element-1>...<element-n>
 //  [[key, value|null], [key, value|null]]
-pub fn batch_entries_response(data: &[(String, Option<StorageEntry>)]) -> Vec<u8> {
-    if data.is_empty() {
-        return null_response();
-    }
-
-    let mut outer_vec = String::new();
-    outer_vec.push('*');
-    outer_vec.push_str(&data.len().to_string());
-    let delim = "\r\n";
-    outer_vec.push_str(delim);
-
-    for (key, value) in data {
-        let key = {
-            let mut k = String::new();
-            k.push('$');
-            k.push_str(&key.len().to_string());
-            k.push_str(delim);
-            k.push_str(key);
-            k.push_str(delim);
-
-            k
-        };
-
-        let value = {
-            match value {
-                None => "$-1\r\n".to_string(),
-                Some(v) => storage_value_to_string(&v.value),
+#[macro_export]
+macro_rules! batch_getlist_entries {
+    ($data:expr) => {
+        {
+            if $data.is_empty() {
+                return null!();
             }
-        };
 
-        let mut inner_vec = String::new();
-        inner_vec.push('*');
-        inner_vec.push_str(&2.to_string());
-        inner_vec.push_str(delim);
-        inner_vec.push_str(&key);
-        inner_vec.push_str(&value);
+            let mut outer_vec = String::new();
+            outer_vec.push('*');
+            outer_vec.push_str(&$data.len().to_string());
+            let delim = "\r\n";
+            outer_vec.push_str(delim);
 
-        outer_vec.push_str(&inner_vec);
-    }
-    outer_vec.as_bytes().to_vec()
+            for (key, value) in $data {
+                let key = {
+                    let mut k = String::new();
+                    k.push('$');
+                    k.push_str(&key.len().to_string());
+                    k.push_str(delim);
+                    k.push_str(key);
+                    k.push_str(delim);
+
+                    k
+                };
+
+                let value = {
+                    match value {
+                        None => "$-1\r\n".to_string(),
+                        Some(v) => $crate::storagevalue_to_string(&v.value),
+                    }
+                };
+
+                let mut inner_vec = String::new();
+                inner_vec.push('*');
+                inner_vec.push_str(&2.to_string());
+                inner_vec.push_str(delim);
+                inner_vec.push_str(&key);
+                inner_vec.push_str(&value);
+
+                outer_vec.push_str(&inner_vec);
+            }
+            outer_vec.as_bytes().to_vec()
+        }
+    };
 }
 
 #[derive(Debug, PartialEq, Eq)]

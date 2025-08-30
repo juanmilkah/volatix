@@ -41,11 +41,20 @@ pub mod process;
 pub mod resp3;
 pub mod storage;
 
+use std::{
+    fs::File,
+    io::{BufWriter, Write},
+    path::Path,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+use anyhow::Context;
 // Make common types available at the crate root
 pub use error::*;
 pub use process::*;
 pub use resp3::*;
 pub use storage::*;
+use tokio::sync::broadcast::Receiver;
 
 pub fn ascii_art() -> &'static str {
     "
@@ -57,4 +66,59 @@ pub fn ascii_art() -> &'static str {
   ░██░██   ░██    ░██ ░██ ░██   ░██     ░██    ░██ ░██  ░██  
    ░███     ░███████  ░██  ░█████░██     ░████ ░██░██    ░██ 
 "
+}
+
+/// Represents different types of program information and messages
+#[derive(Debug, Clone)]
+pub enum Message {
+    /// Any useful information
+    Info(String),
+    /// Error Information
+    Error(String),
+    /// Debug Information
+    Debug(String),
+    /// Signal to the message handler to quit
+    Break,
+}
+
+pub async fn handle_messages(
+    log_file: &Path,
+    mut handler: Receiver<Message>,
+) -> anyhow::Result<()> {
+    let log_file = File::options()
+        .create(true)
+        .append(true)
+        .open(log_file)
+        .context("Open log file for writing")?;
+    let mut f = BufWriter::new(log_file);
+
+    while let Ok(msg) = handler.recv().await {
+        let now = SystemTime::now();
+        match msg {
+            Message::Info(m) => {
+                let m = format!(
+                    "{now} INFO {m}",
+                    now = now.duration_since(UNIX_EPOCH).unwrap().as_secs()
+                );
+                let _ = writeln!(&mut f, "{m}");
+            }
+            Message::Error(m) => {
+                let m = format!(
+                    "{now} ERROR {m}",
+                    now = now.duration_since(UNIX_EPOCH).unwrap().as_secs()
+                );
+                let _ = writeln!(&mut f, "{m}");
+            }
+            Message::Debug(m) => {
+                let m = format!(
+                    "{now} DEBUG {m}",
+                    now = now.duration_since(UNIX_EPOCH).unwrap().as_secs()
+                );
+                let _ = writeln!(&mut f, "{m}");
+            }
+            Message::Break => break,
+        }
+    }
+
+    Ok(())
 }

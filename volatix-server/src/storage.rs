@@ -31,14 +31,14 @@ use serde::{Deserialize, Serialize};
 /// ```
 #[derive(Default)]
 pub struct LockedStorage {
+    /// A flag for any unsynched changes to disk
+    pub is_dirty: bool,
     /// Thread-safe HashMap containing all cache entries
     pub store: Arc<RwLock<HashMap<String, StorageEntry>>>,
     /// Configuration options for the cache
     pub options: StorageOptions,
     /// Atomic statistics for thread-safe performance tracking
     pub stats: StorageStats,
-    /// A flag for any unsynched changes to disk
-    pub is_dirty: bool,
 }
 
 /// Serializable version of storage for disk persistence.

@@ -128,8 +128,7 @@ pub fn serialize_request(command: &Command) -> Vec<u8> {
 
         Command::SetList { key, list } => {
             let vals: Vec<String> = list.iter().map(|v| bstring(v)).collect();
-            let inner_array = array(&[bstring(key), array(&vals)]);
-            array(&[bstring("SETLIST"), inner_array])
+            array(&[bstring("SETLIST"), bstring(key), array(&vals)])
                 .as_bytes()
                 .to_vec()
         }

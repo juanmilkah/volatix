@@ -394,13 +394,7 @@ pub fn parse_line(line: &str) -> Result<Command, Error> {
         // SETLIST names ["foo", "bar", "foofoo", "barbar"]
         "SETLIST" => match parse_arg(&chars, &mut pointer, "key") {
             Ok(key) => match parse_list(&chars, &mut pointer) {
-                Ok(l) => {
-                    if l.len() % 2 != 0 {
-                        parser_error!("Invalid number of args", pointer)
-                    } else {
-                        Ok(Command::SetList { key, list: l })
-                    }
-                }
+                Ok(l) => Ok(Command::SetList { key, list: l }),
                 Err(e) => parser_error!(e, pointer),
             },
 

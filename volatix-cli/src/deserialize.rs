@@ -43,21 +43,8 @@ impl Display for Response {
     }
 }
 
-/// Parse a raw server response into a `Response` enum.
-///
-/// - Bulk strings → `Response::SimpleString`
-/// - Integers → `Response::Integer`
-/// - Big numbers → `Response::BigNumber`
-/// - Nulls → `Response::Null`
-/// - Errors → `Response::SimpleError`
-/// - Arrays (nested) → `Response::Array`
-///
-/// # Errors
-/// Returns an `Err(String)` if the type is unsupported or the content cannot be parsed.
-pub fn deserialize_response(resp: &[u8]) -> Result<Response, String> {
-    let resp = parse_request(resp)?;
-
-    match &resp {
+fn de_inner_response(resp: &RequestType) -> Result<Response, String> {
+    match resp {
         RequestType::BulkString { data } => Ok(Response::SimpleString {
             data: String::from_utf8_lossy(data).to_string(),
         }),
@@ -87,39 +74,28 @@ pub fn deserialize_response(resp: &[u8]) -> Result<Response, String> {
         RequestType::Array { children } => {
             let mut outer_vec = Vec::new();
             for child in children {
-                match child {
-                    RequestType::BulkString { data } => {
-                        outer_vec.push(Response::SimpleString {
-                            data: String::from_utf8_lossy(data).to_string(),
-                        });
-                    }
-                    RequestType::Null => outer_vec.push(Response::Null),
-
-                    RequestType::Array { children } => {
-                        let mut inner_vec = Vec::new();
-                        for child in children {
-                            match child {
-                                RequestType::BulkString { data }
-                                | RequestType::SimpleString { data } => {
-                                    inner_vec.push(Response::SimpleString {
-                                        data: String::from_utf8_lossy(data).to_string(),
-                                    });
-                                }
-                                RequestType::Null => inner_vec.push(Response::Null),
-                                _ => return Err("Unreachable".into()),
-                            }
-                        }
-                        if !inner_vec.is_empty() {
-                            outer_vec.push(Response::Array { data: inner_vec });
-                        }
-                    }
-
-                    _ => return Err("unreachable!".into()),
-                }
+                outer_vec.push(de_inner_response(child)?);
             }
             Ok(Response::Array { data: outer_vec })
         }
 
         _ => Err("Unexpected response type".into()),
     }
+}
+
+/// Parse a raw server response into a `Response` enum.
+///
+/// - Bulk strings → `Response::SimpleString`
+/// - Integers → `Response::Integer`
+/// - Big numbers → `Response::BigNumber`
+/// - Nulls → `Response::Null`
+/// - Errors → `Response::SimpleError`
+/// - Arrays (nested) → `Response::Array`
+///
+/// # Errors
+/// Returns an `Err(String)` if the type is unsupported or the content cannot be parsed.
+pub fn deserialize_response(resp: &[u8]) -> Result<Response, String> {
+    let resp = parse_request(resp)?;
+
+    de_inner_response(&resp)
 }

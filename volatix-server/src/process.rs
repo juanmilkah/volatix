@@ -1,11 +1,12 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
+use tokio::sync::broadcast::Sender;
+
 use crate::{
-    resp3::{
-        RequestType, array_response, batch_entries_response, boolean_response, bulk_error_response,
-        bulk_string_response, integer_response, null_response,
-    },
+    Message, array, batch_getlist_entries, boolean, bulkerror, bulkstring, integer, null,
+    resp3::RequestType,
     storage::{Compression, ConfigEntry, EvictionPolicy, LockedStorage, StorageValue},
+    storagevalue_to_string,
 };
 
 fn request_type_to_storage_value(req: &RequestType) -> Result<StorageValue, String> {
@@ -241,6 +242,7 @@ fn config_entry(key: &str, value: &StorageValue) -> Result<ConfigEntry, String> 
 pub fn process_request(
     req: &RequestType,
     storage: Arc<parking_lot::RwLock<LockedStorage>>,
+    message_tx: Arc<Sender<Message>>,
 ) -> Vec<u8> {
     match req {
         // Handle single command strings (no arguments)
@@ -249,45 +251,50 @@ pub fn process_request(
             match cmd.to_uppercase().as_str() {
                 // Client handshake - Redis compatibility
                 // New RESP connections should begin with HELLO
-                "HELLO" => bulk_string_response(Some("HELLO")),
+                "HELLO" => bulkstring!(Some("HELLO")),
 
                 // Performance monitoring commands
                 "GETSTATS" => {
                     let stats = storage.read().get_stats();
-                    bulk_string_response(Some(&stats.to_string()))
+                    bulkstring!(Some(&stats.to_string()))
                 }
                 "RESETSTATS" => {
                     storage.write().reset_stats();
-                    bulk_string_response(Some("SUCCESS"))
+                    bulkstring!(Some("SUCCESS"))
                 }
 
                 // Configuration management
                 "CONFOPTIONS" => {
                     let options = storage.read().get_options();
-                    bulk_string_response(Some(&options.to_string()))
+                    bulkstring!(Some(&options.to_string()))
                 }
 
                 "CONFRESET" => {
                     storage.write().reset_options();
-                    bulk_string_response(Some("SUCCESS"))
+                    bulkstring!(Some("SUCCESS"))
                 }
 
                 // Administrative commands
                 "FLUSH" => {
                     storage.write().flush();
-                    bulk_string_response(Some("SUCCESS"))
+                    bulkstring!(Some("SUCCESS"))
                 }
 
                 // List all keys in the cache
                 "KEYS" => {
                     let keys = storage.read().get_keys();
                     if keys.is_empty() {
-                        return null_response();
+                        return null!();
                     }
-                    array_response(&keys)
+                    array!(&keys)
                 }
 
-                other => bulk_error_response(&format!("Unknown single command: {other}!")),
+                other => {
+                    let err = format!("Unknown single command: {other}!");
+                    let _ = message_tx.send(Message::Debug(err.clone()));
+
+                    bulkerror!(&err)
+                }
             }
         }
 
@@ -295,7 +302,12 @@ pub fn process_request(
         RequestType::Array { children } => process_array(children, storage),
 
         // All other request types are invalid
-        _ => bulk_error_response("Unsupported format of commands!"),
+        _ => {
+            let err = "Unsupported format of commands!";
+            let _ = message_tx.send(Message::Debug(err.to_string()));
+
+            bulkerror!(err)
+        }
     }
 }
 
@@ -369,7 +381,7 @@ fn handle_get_command(
     storage: Arc<parking_lot::RwLock<LockedStorage>>,
 ) -> Vec<u8> {
     if children.is_empty() {
-        return bulk_error_response("Command missing some arguments");
+        return bulkerror!("Command missing some arguments");
     }
 
     match &children[0] {
@@ -379,11 +391,14 @@ fn handle_get_command(
 
             // respond with the entry's `value` field
             match entry {
-                Some(e) => bulk_string_response(Some(&e.value.to_string())),
-                None => null_response(),
+                Some(v) => {
+                    let res = storagevalue_to_string(&v.value);
+                    res.as_bytes().to_vec()
+                }
+                None => null!(),
             }
         }
-        _ => bulk_error_response("Invalid request type for GET key"),
+        _ => bulkerror!("Invalid request type for GET key"),
     }
 }
 
@@ -401,16 +416,16 @@ fn handle_exists_command(
     storage: Arc<parking_lot::RwLock<LockedStorage>>,
 ) -> Vec<u8> {
     if children.is_empty() {
-        return bulk_error_response("Command missing some arguments");
+        return bulkerror!("Command missing some arguments");
     }
 
     match &children[0] {
         RequestType::BulkString { data } => {
             let key = String::from_utf8_lossy(data).to_string();
             let exists = storage.read().key_exists(&key);
-            boolean_response(exists)
+            boolean!(exists)
         }
-        _ => bulk_error_response("Invalid request type for EXISTS key"),
+        _ => bulkerror!("Invalid request type for EXISTS key"),
     }
 }
 
@@ -433,7 +448,7 @@ fn handle_set_command(
     storage: Arc<parking_lot::RwLock<LockedStorage>>,
 ) -> Vec<u8> {
     if children.len() < 2 {
-        return bulk_error_response("Command missing some arguments");
+        return bulkerror!("Command missing some arguments");
     }
 
     let mut i = 0;
@@ -446,14 +461,14 @@ fn handle_set_command(
                     let entry_value = String::from_utf8_lossy(data).to_string();
                     let entry_value = get_value_type(&entry_value); // Auto-detect type
                     match storage.write().insert_entry(key, entry_value) {
-                        Ok(()) => bulk_string_response(Some("SUCCESS")),
-                        Err(e) => bulk_error_response(&e),
+                        Ok(()) => bulkstring!(Some("SUCCESS")),
+                        Err(e) => bulkerror!(&e),
                     }
                 }
-                _ => bulk_error_response("Invalid request type for SET value"),
+                _ => bulkerror!("Invalid request type for SET value"),
             }
         }
-        _ => bulk_error_response("Invalid request type for SET key"),
+        _ => bulkerror!("Invalid request type for SET key"),
     }
 }
 
@@ -471,16 +486,16 @@ fn handle_delete_command(
     storage: Arc<parking_lot::RwLock<LockedStorage>>,
 ) -> Vec<u8> {
     if children.is_empty() {
-        return bulk_error_response("Command missing some arguments");
+        return bulkerror!("Command missing some arguments");
     }
 
     match &children[0] {
         RequestType::BulkString { data } => {
             let key = String::from_utf8_lossy(data).to_string();
             storage.write().remove_entry(&key);
-            bulk_string_response(Some("SUCCESS"))
+            bulkstring!(Some("SUCCESS"))
         }
-        _ => bulk_error_response("Invalid request type for DELETE key"),
+        _ => bulkerror!("Invalid request type for DELETE key"),
     }
 }
 
@@ -502,7 +517,7 @@ fn handle_dump_command(
     storage: Arc<parking_lot::RwLock<LockedStorage>>,
 ) -> Vec<u8> {
     if children.is_empty() {
-        return bulk_error_response("Command missing some arguments");
+        return bulkerror!("Command missing some arguments");
     }
 
     match &children[0] {
@@ -511,11 +526,11 @@ fn handle_dump_command(
             let entry = storage.read().get_entry(&key);
 
             match entry {
-                Some(e) => bulk_string_response(Some(&e.to_string())),
-                None => null_response(),
+                Some(e) => bulkstring!(Some(&e.to_string())),
+                None => null!(),
             }
         }
-        _ => bulk_error_response("Invalid request type for Dump key"),
+        _ => bulkerror!("Invalid request type for Dump key"),
     }
 }
 
@@ -536,7 +551,7 @@ fn handle_confget_command(
     storage: Arc<parking_lot::RwLock<LockedStorage>>,
 ) -> Vec<u8> {
     if children.is_empty() {
-        return bulk_error_response("Command missing some arguments");
+        return bulkerror!("Command missing some arguments");
     }
 
     match &children[0] {
@@ -545,11 +560,11 @@ fn handle_confget_command(
             let entry = storage.read().get_config_entry(&key);
 
             match entry {
-                Some(e) => bulk_string_response(Some(&e.to_string())),
-                None => null_response(),
+                Some(e) => bulkstring!(Some(&e.to_string())),
+                None => null!(),
             }
         }
-        _ => bulk_error_response("Invalid request type for CONFGET key"),
+        _ => bulkerror!("Invalid request type for CONFGET key"),
     }
 }
 
@@ -572,7 +587,7 @@ fn handle_confset_command(
     storage: Arc<parking_lot::RwLock<LockedStorage>>,
 ) -> Vec<u8> {
     if children.len() < 2 {
-        return bulk_error_response("Command missing some arguments");
+        return bulkerror!("Command missing some arguments");
     }
 
     let mut i = 0;
@@ -586,16 +601,16 @@ fn handle_confset_command(
                     let entry_value = get_value_type(&entry_value);
                     let conf_entry = match config_entry(&key, &entry_value) {
                         Ok(e) => e,
-                        Err(e) => return bulk_error_response(&e),
+                        Err(e) => return bulkerror!(&e),
                     };
                     storage.write().set_config_entry(&conf_entry);
 
-                    bulk_string_response(Some("SUCCESS"))
+                    bulkstring!(Some("SUCCESS"))
                 }
-                _ => bulk_error_response("Invalid request type for SET value"),
+                _ => bulkerror!("Invalid request type for SET value"),
             }
         }
-        _ => bulk_error_response("Invalid request type for SET key"),
+        _ => bulkerror!("Invalid request type for SET key"),
     }
 }
 
@@ -613,7 +628,7 @@ fn handle_getttl_command(
     storage: Arc<parking_lot::RwLock<LockedStorage>>,
 ) -> Vec<u8> {
     if children.is_empty() {
-        return bulk_error_response("Command missing some arguments");
+        return bulkerror!("Command missing some arguments");
     }
 
     match &children[0] {
@@ -621,14 +636,13 @@ fn handle_getttl_command(
             let key = String::from_utf8_lossy(data).to_string();
             let ttl = storage.read().time_to_live(&key);
             match ttl {
-                Some(ttl) => integer_response(ttl.as_secs() as i64),
-                None => null_response(),
+                Some(ttl) => integer!(ttl.as_secs() as i64),
+                None => null!(),
             }
         }
-        _ => bulk_error_response("Invalid request type for GETTTL key"),
+        _ => bulkerror!("Invalid request type for GETTTL key"),
     }
 }
-
 /// Handles SETWTTL command: stores a key-value pair with specific TTL.
 /// Format: `SETWTTL key value ttl_seconds`
 ///
@@ -647,7 +661,7 @@ fn handle_setwttl_command(
     storage: Arc<parking_lot::RwLock<LockedStorage>>,
 ) -> Vec<u8> {
     if children.len() < 3 {
-        return bulk_error_response("Command missing some arguments");
+        return bulkerror!("Command missing some arguments");
     }
 
     let mut i = 0;
@@ -667,21 +681,21 @@ fn handle_setwttl_command(
                             let ttl = match ttl {
                                 StorageValue::Int(n) => Duration::from_secs(n as u64),
                                 _ => {
-                                    return bulk_error_response("Invalid SETWTTL ttl");
+                                    return bulkerror!("Invalid SETWTTL ttl");
                                 }
                             };
                             match storage.write().insert_with_ttl(key, entry_value, ttl) {
-                                Ok(()) => bulk_string_response(Some("SUCCESS")),
-                                Err(e) => bulk_error_response(&e),
+                                Ok(()) => bulkstring!(Some("SUCCESS")),
+                                Err(e) => bulkerror!(&e),
                             }
                         }
-                        _ => bulk_error_response("Invalid SETWTTL ttl"),
+                        _ => bulkerror!("Invalid SETWTTL ttl"),
                     }
                 }
-                _ => bulk_error_response("Invalid request type for SETWTTL value"),
+                _ => bulkerror!("Invalid request type for SETWTTL value"),
             }
         }
-        _ => bulk_error_response("Invalid request type for SETWTTL key"),
+        _ => bulkerror!("Invalid request type for SETWTTL key"),
     }
 }
 
@@ -704,7 +718,7 @@ fn handle_expire_command(
     storage: Arc<parking_lot::RwLock<LockedStorage>>,
 ) -> Vec<u8> {
     if children.len() < 2 {
-        return bulk_error_response("Command missing some arguments");
+        return bulkerror!("Command missing some arguments");
     }
 
     let mut i = 0;
@@ -718,21 +732,21 @@ fn handle_expire_command(
                     let addition_ttl = match get_value_type(&addition_ttl) {
                         StorageValue::Int(n) => n,
                         _ => {
-                            return bulk_error_response("Invalid EXPIRE addition_tll");
+                            return bulkerror!("Invalid EXPIRE addition_tll");
                         }
                     };
 
                     match storage.write().extend_ttl(&key, addition_ttl) {
-                        Ok(()) => bulk_string_response(Some("SUCCESS")),
-                        Err(e) => bulk_error_response(&e),
+                        Ok(()) => bulkstring!(Some("SUCCESS")),
+                        Err(e) => bulkerror!(&e),
                     };
 
-                    bulk_string_response(Some("SUCCESS"))
+                    bulkstring!(Some("SUCCESS"))
                 }
-                _ => bulk_error_response("Invalid request type for EXPIRE value"),
+                _ => bulkerror!("Invalid request type for EXPIRE value"),
             }
         }
-        _ => bulk_error_response("Invalid request type for EXPIRE key"),
+        _ => bulkerror!("Invalid request type for EXPIRE key"),
     }
 }
 
@@ -751,7 +765,7 @@ fn handle_deletelist_command(
     storage: Arc<parking_lot::RwLock<LockedStorage>>,
 ) -> Vec<u8> {
     if children.is_empty() {
-        return null_response();
+        return null!();
     }
 
     let mut keys = Vec::new();
@@ -766,7 +780,7 @@ fn handle_deletelist_command(
     }
 
     storage.write().remove_entries(&keys);
-    bulk_string_response(Some("SUCCESS"))
+    bulkstring!(Some("SUCCESS"))
 }
 
 /// Handles GETLIST command: retrieves multiple keys in one operation.
@@ -784,7 +798,7 @@ fn handle_getlist_command(
     storage: Arc<parking_lot::RwLock<LockedStorage>>,
 ) -> Vec<u8> {
     if children.is_empty() {
-        return null_response();
+        return null!();
     }
 
     let mut keys = Vec::new();
@@ -799,7 +813,7 @@ fn handle_getlist_command(
     let entries = storage.read().get_entries(&keys);
     // Entries -> Vec<(String, Option<StorageEntry>)>
     // Response -> [[key, value|null], [key, value|null]]
-    batch_entries_response(&entries)
+    batch_getlist_entries!(&entries)
 }
 
 /// Converts a RESP3 request type to our internal StorageValue format.
@@ -819,41 +833,29 @@ fn handle_setlist_command(
     storage: Arc<parking_lot::RwLock<LockedStorage>>,
 ) -> Vec<u8> {
     if children.is_empty() {
-        return null_response();
+        return null!();
     }
 
-    let mut key = String::new();
-    let mut vals = Vec::new();
-    let mut errors = Vec::new();
+    let key = match &children[0] {
+        RequestType::BulkString { data } => match String::from_utf8(data.to_vec()) {
+            Ok(v) => v,
+            Err(e) => return bulkerror!(&format!("Setlist key has invalid characters: {e}")),
+        },
 
-    for child in children {
-        // Expected format: [key, [vals..]]
-        match child {
-            RequestType::Array { children } => {
-                // Array of values: [val, val, val, ..]
-                for c in children {
-                    match request_type_to_storage_value(c) {
-                        Ok(v) => vals.push(v),
-                        Err(e) => errors.push(e),
-                    }
-                }
-            }
-            RequestType::BulkString { data } => {
-                key = String::from_utf8_lossy(data).to_string();
-            }
-            _ => {
-                return bulk_error_response("Not an array list");
-            }
-        }
-    }
+        _ => return bulkerror!("Unsupported request_type for setlist key"),
+    };
+
+    let vals = match request_type_to_storage_value(&children[1]) {
+        Ok(v) => v,
+        Err(e) => return bulkerror!(&e),
+    };
 
     // Store as a list value
-    let vals = StorageValue::List(vals);
     if let Err(err) = storage.write().insert_entry(key, vals) {
-        return bulk_error_response(&err);
+        return bulkerror!(&err);
     }
 
-    bulk_string_response(Some("SUCCESS"))
+    bulkstring!(Some("SUCCESS"))
 }
 
 /// Handles SETMAP command: stores multiple key-value pairs from a map.
@@ -875,7 +877,7 @@ fn handle_setmap_command(
     storage: Arc<parking_lot::RwLock<LockedStorage>>,
 ) -> Vec<u8> {
     if children.is_empty() {
-        return null_response();
+        return null!();
     }
 
     match &children[0] {
@@ -894,11 +896,11 @@ fn handle_setmap_command(
                     RequestType::Integer { data } => {
                         let int_str = match String::from_utf8(data.to_vec()) {
                             Ok(s) => s,
-                            Err(e) => return bulk_error_response(&e.to_string()),
+                            Err(e) => return bulkerror!(&e.to_string()),
                         };
                         let int = match int_str.parse::<i64>() {
                             Ok(i) => i,
-                            Err(e) => return bulk_error_response(&e.to_string()),
+                            Err(e) => return bulkerror!(&e.to_string()),
                         };
                         StorageValue::Int(int)
                     }
@@ -907,14 +909,14 @@ fn handle_setmap_command(
                         let float = match int.parse::<f64>() {
                             Ok(f) => f,
                             Err(_) => {
-                                return bulk_error_response("Invalid float value");
+                                return bulkerror!("Invalid float value");
                             }
                         };
                         StorageValue::Float(float)
                     }
                     RequestType::Boolean { data } => StorageValue::Bool(*data),
                     _ => {
-                        return bulk_error_response("Unsupported json value type");
+                        return bulkerror!("Unsupported json value type");
                     }
                 };
 
@@ -923,11 +925,11 @@ fn handle_setmap_command(
 
             // Insert all entries as a batch operation
             if let Err(e) = storage.write().insert_entries(entries) {
-                return bulk_error_response(&e);
+                return bulkerror!(&e);
             }
-            bulk_string_response(Some("SUCCESS"))
+            bulkstring!(Some("SUCCESS"))
         }
-        _ => bulk_error_response("Unsuported format for SETMAP"),
+        _ => bulkerror!("Unsuported format for SETMAP"),
     }
 }
 
@@ -949,16 +951,16 @@ fn handle_incr_command(
     storage: Arc<parking_lot::RwLock<LockedStorage>>,
 ) -> Vec<u8> {
     if children.is_empty() {
-        return bulk_error_response("Command missing some arguments");
+        return bulkerror!("Command missing some arguments");
     }
 
     match &children[0] {
         RequestType::BulkString { data } => {
             let key = String::from_utf8_lossy(data);
             storage.write().increment_entry(&key);
-            bulk_string_response(Some("SUCCESS"))
+            bulkstring!(Some("SUCCESS"))
         }
-        _ => bulk_error_response("Invalid INCR key type"),
+        _ => bulkerror!("Invalid INCR key type"),
     }
 }
 
@@ -980,16 +982,16 @@ fn handle_decr_command(
     storage: Arc<parking_lot::RwLock<LockedStorage>>,
 ) -> Vec<u8> {
     if children.is_empty() {
-        return bulk_error_response("Command missing some arguments");
+        return bulkerror!("Command missing some arguments");
     }
 
     match &children[0] {
         RequestType::BulkString { data } => {
             let key = String::from_utf8_lossy(data);
             storage.write().decrement_entry(&key);
-            bulk_string_response(Some("SUCCESS"))
+            bulkstring!(Some("SUCCESS"))
         }
-        _ => bulk_error_response("Invalid DECR key type"),
+        _ => bulkerror!("Invalid DECR key type"),
     }
 }
 
@@ -1011,7 +1013,7 @@ fn handle_rename_command(
     storage: Arc<parking_lot::RwLock<LockedStorage>>,
 ) -> Vec<u8> {
     if children.len() < 2 {
-        return bulk_error_response("Command missing some arguments");
+        return bulkerror!("Command missing some arguments");
     }
 
     let mut i = 0;
@@ -1024,12 +1026,12 @@ fn handle_rename_command(
                     let new_key = String::from_utf8_lossy(data);
 
                     storage.write().rename_entry(&old_key, &new_key);
-                    bulk_string_response(Some("SUCCESS"))
+                    bulkstring!(Some("SUCCESS"))
                 }
-                _ => bulk_error_response("Invalid RENAME new_key type"),
+                _ => bulkerror!("Invalid RENAME new_key type"),
             }
         }
-        _ => bulk_error_response("Invalid RENAME old_key type"),
+        _ => bulkerror!("Invalid RENAME old_key type"),
     }
 }
 
@@ -1052,23 +1054,23 @@ fn handle_evictnow_command(
 ) -> Vec<u8> {
     if children.is_empty() {
         storage.write().evict_entries(0);
-        return bulk_string_response(Some("SUCCESS"));
+        return bulkstring!(Some("SUCCESS"));
     }
 
     match &children[0] {
         RequestType::Integer { data } => {
             let int_str = match String::from_utf8(data.to_vec()) {
                 Ok(s) => s,
-                Err(e) => return bulk_error_response(&e.to_string()),
+                Err(e) => return bulkerror!(&e.to_string()),
             };
             let int = match int_str.parse::<usize>() {
                 Ok(i) => i,
-                Err(e) => return bulk_error_response(&e.to_string()),
+                Err(e) => return bulkerror!(&e.to_string()),
             };
             storage.write().evict_entries(int);
-            bulk_string_response(Some("SUCCESS"))
+            bulkstring!(Some("SUCCESS"))
         }
-        _ => bulk_error_response("Invalid count type for evictnow command"),
+        _ => bulkerror!("Invalid count type for evictnow command"),
     }
 }
 
@@ -1096,7 +1098,7 @@ fn process_array(
 
     // Route to appropriate command handler
     match command {
-        Command::Unknown => null_response(),
+        Command::Unknown => null!(),
         Command::Get => handle_get_command(&children[i..], storage),
         Command::Exists => handle_exists_command(&children[i..], storage),
         Command::Set => handle_set_command(&children[i..], storage),

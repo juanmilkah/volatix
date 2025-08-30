@@ -7,8 +7,14 @@ use std::{
 };
 
 use clap::Parser;
-use libvolatix::{LockedStorage, StorageOptions, ascii_art, parse_request, process_request};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use libvolatix::{
+    LockedStorage, Message, StorageOptions, ascii_art, handle_messages, parse_request,
+    process_request,
+};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    sync::broadcast::Sender,
+};
 
 // start the server backend on this port
 const DEFAULT_PORT: u16 = 7878;
@@ -18,6 +24,7 @@ const SNAPSHOTS_INTERVAL_TIME: u64 = 60 * 5; // In seconds
 async fn handle_client(
     mut stream: tokio::net::TcpStream,
     storage: Arc<parking_lot::RwLock<LockedStorage>>,
+    message_tx: Arc<Sender<Message>>,
 ) {
     // pre-allocating a higher value may lead to
     // the tokio worker overflowing it's stack
@@ -29,20 +36,26 @@ async fn handle_client(
             Ok(n) => match parse_request(&buffer[..n]) {
                 Ok(req) => {
                     let storage = Arc::clone(&storage);
-                    let response = process_request(&req, storage);
+                    let response = process_request(&req, storage, Arc::clone(&message_tx));
 
                     if let Err(e) = stream.write_all(&response).await {
-                        eprintln!("ERROR: {e}");
+                        let _ =
+                            message_tx.send(Message::Error(format!("Writing to tcp Stream: {e}")));
                     }
                 }
                 Err(err) => {
-                    let err = format!("Error parsing request: {err}");
+                    let err = format!("Invalid request: {err}");
+                    let _ = message_tx.send(Message::Error(format!("Invalid request: {err}")));
+
                     if let Err(e) = stream.write_all(err.as_bytes()).await {
-                        eprintln!("ERROR: {e}");
+                        let _ =
+                            message_tx.send(Message::Error(format!("Writing to tcp Stream: {e}")));
                     }
                 }
             },
-            Err(e) => eprintln!("ERROR: {e}"),
+            Err(e) => {
+                let _ = message_tx.send(Message::Error(format!("Reading from tcp stream: {e}")));
+            }
         }
     }
 }
@@ -74,6 +87,20 @@ fn get_persistent_path(filename: &str) -> anyhow::Result<PathBuf> {
     Ok(home.to_path_buf().join(filename))
 }
 
+fn get_log_file() -> anyhow::Result<PathBuf> {
+    let home = match env::home_dir() {
+        Some(v) => v,
+        None => {
+            return Err(anyhow::anyhow!(
+                "Failed to get $HOME env variable".to_string()
+            ));
+        }
+    };
+
+    let home = Path::new(&home);
+    Ok(home.to_path_buf().join(".volatix.logs"))
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     println!("{art}", art = ascii_art());
@@ -84,6 +111,14 @@ async fn main() -> anyhow::Result<()> {
     let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
     println!("Server listening on {addr}");
+
+    // set up log messages handling
+    let (message_tx, message_rx) = tokio::sync::broadcast::channel(10);
+    let message_tx = Arc::new(message_tx);
+    let log_file = get_log_file()?;
+    tokio::spawn(async move {
+        let _ = handle_messages(&log_file, message_rx).await;
+    });
 
     // Intialise storage data
     let options = StorageOptions::default();
@@ -126,8 +161,9 @@ async fn main() -> anyhow::Result<()> {
             },
             Ok((socket, _)) = listener.accept() =>{
                 let storage = Arc::clone(&storage);
+                let message_tx = Arc::clone(&message_tx);
                 tokio::spawn(async move{
-                    handle_client(socket, storage).await;
+                    handle_client(socket, storage, message_tx).await;
                 });
             }
         }
