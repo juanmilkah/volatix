@@ -43,10 +43,11 @@ fn request_type_to_storage_value(req: &RequestType) -> Result<StorageValue, Stri
 
         // Convert arrays to lists by recursively converting each element
         RequestType::Array { children } => {
-            let elems = children
+            let mut elems = children
                 .iter()
                 .flat_map(request_type_to_storage_value) // Skip failed conversions
-                .collect();
+                .collect::<Vec<StorageValue>>();
+            elems.shrink_to_fit();
             Ok(StorageValue::List(elems))
         }
 
@@ -213,6 +214,75 @@ fn config_entry(key: &str, value: &StorageValue) -> Result<ConfigEntry, String> 
     }
 }
 
+/// Processes single-word commands
+/// This is called for bulkstring resp3 types
+///
+/// # Arguments
+/// *`data` - A reference to an array of u8
+/// * `storage` - Storage engine reference
+/// *`message_tx` - A message sender
+///
+/// # Returns
+/// RESP3-encoded response bytes
+///
+/// # Command Format
+/// All commands follow the pattern: COMMAND
+fn process_single_command(
+    data: &[u8],
+    storage: Arc<parking_lot::RwLock<LockedStorage>>,
+    message_tx: Arc<Sender<Message>>,
+) -> Vec<u8> {
+    let cmd = String::from_utf8_lossy(data).to_string();
+    match cmd.to_uppercase().as_str() {
+        // Client handshake - Redis compatibility
+        // New RESP connections should begin with HELLO
+        "HELLO" => bulkstring!(Some("HELLO")),
+
+        // Performance monitoring commands
+        "GETSTATS" => {
+            let stats = storage.read().get_stats();
+            bulkstring!(Some(&stats.to_string()))
+        }
+        "RESETSTATS" => {
+            storage.write().reset_stats();
+            bulkstring!(Some("SUCCESS"))
+        }
+
+        // Configuration management
+        "CONFOPTIONS" => {
+            let options = storage.read().get_options();
+            bulkstring!(Some(&options.to_string()))
+        }
+
+        "CONFRESET" => {
+            storage.write().reset_options();
+            bulkstring!(Some("SUCCESS"))
+        }
+
+        // Administrative commands
+        "FLUSH" => {
+            storage.write().flush();
+            bulkstring!(Some("SUCCESS"))
+        }
+
+        // List all keys in the cache
+        "KEYS" => {
+            let keys = storage.read().get_keys();
+            if keys.is_empty() {
+                return null!();
+            }
+            array!(&keys)
+        }
+
+        other => {
+            let err = format!("Unknown single command: {other}!");
+            let _ = message_tx.send(Message::Debug(err.clone()));
+
+            bulkerror!(&err)
+        }
+    }
+}
+
 /// Main request processing function that routes RESP3 requests to appropriate handlers.
 /// This is the entry point for all client requests after RESP3 parsing.
 ///
@@ -247,55 +317,7 @@ pub fn process_request(
     match req {
         // Handle single command strings (no arguments)
         RequestType::BulkString { data } => {
-            let cmd = String::from_utf8_lossy(data).to_string();
-            match cmd.to_uppercase().as_str() {
-                // Client handshake - Redis compatibility
-                // New RESP connections should begin with HELLO
-                "HELLO" => bulkstring!(Some("HELLO")),
-
-                // Performance monitoring commands
-                "GETSTATS" => {
-                    let stats = storage.read().get_stats();
-                    bulkstring!(Some(&stats.to_string()))
-                }
-                "RESETSTATS" => {
-                    storage.write().reset_stats();
-                    bulkstring!(Some("SUCCESS"))
-                }
-
-                // Configuration management
-                "CONFOPTIONS" => {
-                    let options = storage.read().get_options();
-                    bulkstring!(Some(&options.to_string()))
-                }
-
-                "CONFRESET" => {
-                    storage.write().reset_options();
-                    bulkstring!(Some("SUCCESS"))
-                }
-
-                // Administrative commands
-                "FLUSH" => {
-                    storage.write().flush();
-                    bulkstring!(Some("SUCCESS"))
-                }
-
-                // List all keys in the cache
-                "KEYS" => {
-                    let keys = storage.read().get_keys();
-                    if keys.is_empty() {
-                        return null!();
-                    }
-                    array!(&keys)
-                }
-
-                other => {
-                    let err = format!("Unknown single command: {other}!");
-                    let _ = message_tx.send(Message::Debug(err.clone()));
-
-                    bulkerror!(&err)
-                }
-            }
+            process_single_command(&data, Arc::clone(&storage), Arc::clone(&message_tx))
         }
 
         // Handle command arrays (commands with arguments)
@@ -452,23 +474,22 @@ fn handle_set_command(
     }
 
     let mut i = 0;
-    match &children[i] {
-        RequestType::BulkString { data } => {
-            let key = String::from_utf8_lossy(data).to_string();
-            i += 1;
-            match &children[i] {
-                RequestType::BulkString { data } => {
-                    let entry_value = String::from_utf8_lossy(data).to_string();
-                    let entry_value = get_value_type(&entry_value); // Auto-detect type
-                    match storage.write().insert_entry(key, entry_value) {
-                        Ok(()) => bulkstring!(Some("SUCCESS")),
-                        Err(e) => bulkerror!(&e),
-                    }
-                }
-                _ => bulkerror!("Invalid request type for SET value"),
+
+    if let RequestType::BulkString { data } = &children[i] {
+        let key = String::from_utf8_lossy(data).to_string();
+        i += 1;
+        if let RequestType::BulkString { data } = &children[i] {
+            let entry_value = String::from_utf8_lossy(data).to_string();
+            let entry_value = get_value_type(&entry_value); // Auto-detect type
+            match storage.write().insert_entry(key, entry_value) {
+                Ok(()) => bulkstring!(Some("SUCCESS")),
+                Err(e) => bulkerror!(&e),
             }
+        } else {
+            bulkerror!("Invalid request type for SET value")
         }
-        _ => bulkerror!("Invalid request type for SET key"),
+    } else {
+        bulkerror!("Invalid request type for SET key")
     }
 }
 

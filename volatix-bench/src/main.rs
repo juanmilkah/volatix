@@ -164,7 +164,7 @@ fn worker_thread(id: usize, config: &Config) {
         Ok(stream) => stream,
         Err(e) => {
             eprintln!("Thread {id} failed to connect: {e}");
-            return;
+            std::process::exit(1);
         }
     };
     let mut stream = tcp_stream;

@@ -109,9 +109,12 @@ impl StorageValue {
             StorageValue::Bool(_) => size_of_val(self),
             StorageValue::Text(t) => size_of_val(self) + t.capacity(),
             StorageValue::Bytes(b) => b.len(),
-            StorageValue::List(storage_values) => {
-                storage_values.iter().map(|s| s.size_in_bytes()).sum()
-            }
+            // The list inner vector full.
+            // shrink_to_fit() has been called on it
+            StorageValue::List(storage_values) => storage_values
+                .iter()
+                .map(|s| s.size_in_bytes())
+                .sum::<usize>(),
             StorageValue::Map(items) => items
                 .iter()
                 .map(|(k, v)| k.capacity() + v.size_in_bytes())
