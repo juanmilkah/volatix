@@ -416,7 +416,6 @@ struct UnlockedStorage {
     stats: NonAtomicStats,
 }
 
-
 impl LockedStorage {
     /// Creates a new storage instance with the given options.
     ///
