@@ -218,9 +218,9 @@ fn config_entry(key: &str, value: &StorageValue) -> Result<ConfigEntry, String> 
 /// This is called for bulkstring resp3 types
 ///
 /// # Arguments
-/// *`data` - A reference to an array of u8
-/// * `storage` - Storage engine reference
-/// *`message_tx` - A message sender
+///   * `data` - A reference to an array of u8
+///   * `storage` - Storage engine reference
+///   * `message_tx` - A message sender
 ///
 /// # Returns
 /// RESP3-encoded response bytes
@@ -317,7 +317,7 @@ pub fn process_request(
     match req {
         // Handle single command strings (no arguments)
         RequestType::BulkString { data } => {
-            process_single_command(&data, Arc::clone(&storage), Arc::clone(&message_tx))
+            process_single_command(data, Arc::clone(&storage), Arc::clone(&message_tx))
         }
 
         // Handle command arrays (commands with arguments)
