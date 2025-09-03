@@ -16,40 +16,6 @@ use flate2::bufread::{ZlibDecoder, ZlibEncoder};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
-/// Thread-safe storage wrapper with atomic statistics and configuration options.
-/// This is the main interface for cache operations.
-///
-/// # Example
-/// ```rust
-/// use std::time::Duration;
-/// use libvolatix::{LockedStorage, StorageValue};
-///
-/// let mut storage = LockedStorage::default();
-/// storage.insert_entry("key".to_string(), StorageValue::Text("value".to_string())).unwrap();
-/// let entry = storage.get_entry("key");
-/// assert!(entry.is_some());
-/// ```
-#[derive(Default)]
-pub struct LockedStorage {
-    /// A flag for any unsynched changes to disk
-    pub is_dirty: bool,
-    /// Thread-safe HashMap containing all cache entries
-    pub store: Arc<RwLock<HashMap<String, StorageEntry>>>,
-    /// Configuration options for the cache
-    pub options: StorageOptions,
-    /// Atomic statistics for thread-safe performance tracking
-    pub stats: StorageStats,
-}
-
-/// Serializable version of storage for disk persistence.
-/// Used internally during save/load operations.
-#[derive(Serialize, Deserialize)]
-struct UnlockedStorage {
-    store: HashMap<String, StorageEntry>,
-    options: StorageOptions,
-    stats: NonAtomicStats,
-}
-
 /// Represents all possible value types that can be stored in the cache.
 /// Supports Redis-like data structures with automatic size calculation.
 ///
@@ -415,6 +381,41 @@ fn compress(data: &str) -> Result<Vec<u8>, String> {
 
     Ok(output)
 }
+
+/// Thread-safe storage wrapper with atomic statistics and configuration options.
+/// This is the main interface for cache operations.
+///
+/// # Example
+/// ```rust
+/// use std::time::Duration;
+/// use libvolatix::{LockedStorage, StorageValue};
+///
+/// let mut storage = LockedStorage::default();
+/// storage.insert_entry("key".to_string(), StorageValue::Text("value".to_string())).unwrap();
+/// let entry = storage.get_entry("key");
+/// assert!(entry.is_some());
+/// ```
+#[derive(Default)]
+pub struct LockedStorage {
+    /// A flag for any unsynched changes to disk
+    pub is_dirty: bool,
+    /// Thread-safe HashMap containing all cache entries
+    pub store: Arc<RwLock<HashMap<String, StorageEntry>>>,
+    /// Configuration options for the cache
+    pub options: StorageOptions,
+    /// Atomic statistics for thread-safe performance tracking
+    pub stats: StorageStats,
+}
+
+/// Serializable version of storage for disk persistence.
+/// Used internally during save/load operations.
+#[derive(Serialize, Deserialize)]
+struct UnlockedStorage {
+    store: HashMap<String, StorageEntry>,
+    options: StorageOptions,
+    stats: NonAtomicStats,
+}
+
 
 impl LockedStorage {
     /// Creates a new storage instance with the given options.
