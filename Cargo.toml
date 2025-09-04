@@ -1,11 +1,11 @@
 [package]
-name = "volatix"
+authors = ["Juan Milkah <juanmilkah@gmail.com>"]
 description = "An in memory database"
+edition = "2024"
+license = "MIT"
+name = "volatix"
 readme = "README.md"
 version = "0.1.0"
-edition = "2024"
-authors = ["Juan Milkah <juanmilkah@gmail.com>"]
-license = "MIT"
 
 [workspace]
 members = ["volatix-server", "volatix-cli", "volatix-bench"]
@@ -15,7 +15,7 @@ name = "volatix-server"
 path = "volatix-server/src/main.rs"
 
 [[bin]]
-name ="volatix-cli"
+name = "volatix-cli"
 path = "volatix-cli/src/main.rs"
 
 [lib]
@@ -33,27 +33,26 @@ clap = { version = "4.5.43", features = ["derive"] }
 crossterm = "0.29.0"
 ctrlc = "3.4.7"
 flate2 = "1.1.2"
-libvolatix = {path = "volatix-server"}
+libvolatix = { path = "volatix-server" }
 parking_lot = "0.12.4"
 rand = "0.9.2"
 serde = { version = "1.0.219", features = ["derive"] }
 tokio = { version = "1.47.1", features = ["full"] }
 
 [dependencies]
-anyhow = {workspace = true}
-bincode2 = {workspace = true}
-clap = {workspace = true}
-crossterm = {workspace = true}
-ctrlc = {workspace = true}
-flate2 = {workspace = true}
-parking_lot = {workspace = true}
-rand = {workspace = true}
-serde = {workspace = true}
-tokio = {workspace = true}
+anyhow = { workspace = true }
+bincode2 = { workspace = true }
+clap = { workspace = true }
+crossterm = { workspace = true }
+ctrlc = { workspace = true }
+flate2 = { workspace = true }
+parking_lot = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+tokio = { workspace = true }
 
 [profile.release]
 # debug = true
-strip = true
 lto = "thin"
-opt-level = 3
-# codegen-units = 1
+opt-level = "s"
+strip = true
