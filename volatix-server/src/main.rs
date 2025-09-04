@@ -6,15 +6,18 @@ use std::{
     time::Duration,
 };
 
+mod process;
+
 use clap::Parser;
 use libvolatix::{
     LockedStorage, Message, StorageOptions, ascii_art, handle_messages, parse_request,
-    process_request,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     sync::broadcast::Sender,
 };
+
+use crate::process::process_request;
 
 // start the server backend on this port
 const DEFAULT_PORT: u16 = 7878;

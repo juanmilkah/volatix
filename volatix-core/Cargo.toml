@@ -1,0 +1,13 @@
+[package]
+name = "volatix-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = { workspace = true }
+bincode2 = { workspace = true }
+clap = { workspace = true }
+flate2 = { workspace = true }
+parking_lot = { workspace = true }
+serde = { workspace = true }
+tokio = { workspace = true }
