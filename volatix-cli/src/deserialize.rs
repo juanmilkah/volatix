@@ -4,6 +4,7 @@
 //! into high-level `Response` enums for easier handling in application code.
 
 use ::libvolatix::{RequestType, parse_request};
+use libvolatix::Inner;
 use std::fmt::Display;
 
 /// Represents a parsed server response in a structured format.
@@ -99,7 +100,10 @@ fn de_inner_response(resp: &RequestType) -> Result<Response, String> {
 /// # Errors
 /// Returns an `Err(String)` if the type is unsupported or the content cannot be parsed.
 pub fn deserialize_response(resp: &[u8]) -> Result<Response, String> {
-    let resp = parse_request(resp)?;
+    let resp = parse_request(resp).map_err(|err| match err.into_inner() {
+        Inner::ParserError { message, offset } => format!("{message} at byte offset {offset}"),
+        _ => format!("Unkown error! {}", err),
+    })?;
 
     de_inner_response(&resp)
 }

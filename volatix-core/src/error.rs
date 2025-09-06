@@ -20,6 +20,12 @@ pub enum Inner {
     StorageError { message: String },
 }
 
+impl Error {
+    pub fn into_inner(&self) -> Inner {
+        self.inner.clone()
+    }
+}
+
 /// Converts a error message to an Error with inner type ParserError.
 #[macro_export]
 macro_rules! parser_error {

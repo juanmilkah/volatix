@@ -6,7 +6,3 @@ version = "0.1.0"
 [dependencies]
 clap = { workspace = true }
 tokio = { workspace = true }
-
-[lib]
-name = "libvolatix"
-path = "src/lib.rs"
