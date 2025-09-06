@@ -1,7 +1,7 @@
 use std::{
     fmt,
     fs::File,
-    io::{BufWriter, Write},
+    io::{self, BufWriter, Write},
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -23,6 +23,15 @@ pub enum Inner {
 impl Error {
     pub fn into_inner(&self) -> Inner {
         self.inner.clone()
+    }
+}
+
+impl From<Error> for io::Error{
+    fn from(value: Error) -> Self {
+        match value.into_inner(){
+            Inner::ParserError { message, offset: _ } => io::Error::other(message),
+            Inner::StorageError { message } => io::Error::other(message),
+        }
     }
 }
 

@@ -147,10 +147,7 @@ mod integration {
         let mut buffer = [0u8; BUFFER_SIZE];
         let n = stream.read(&mut buffer)?;
 
-        match parse_request(&buffer[..n]) {
-            Ok(result) => Ok(result),
-            Err(e) => Err(io::Error::new(io::ErrorKind::InvalidData, e)),
-        }
+        parse_request(&buffer[..n]).map_err(|err| err.into())
     }
 
     #[test]
