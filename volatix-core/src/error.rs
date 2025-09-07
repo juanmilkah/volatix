@@ -26,9 +26,9 @@ impl Error {
     }
 }
 
-impl From<Error> for io::Error{
+impl From<Error> for io::Error {
     fn from(value: Error) -> Self {
-        match value.into_inner(){
+        match value.into_inner() {
             Inner::ParserError { message, offset: _ } => io::Error::other(message),
             Inner::StorageError { message } => io::Error::other(message),
         }
