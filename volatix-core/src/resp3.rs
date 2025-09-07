@@ -166,10 +166,11 @@ macro_rules! integer {
     };
 }
 
-/// Convert a StorageValue to a string.
+/// Convert a StorageValue to the appropriate RequestType String representation.
+/// Example
+/// StorageValue::Int gets mapped to RequestType::Integer
 pub fn storagevalue_to_string(value: &StorageValue) -> String {
     let delim = "\r\n";
-    // FIX: Implement these correctly
     match value {
         StorageValue::Int(i) => format!(":{}\r\n", i),
 
