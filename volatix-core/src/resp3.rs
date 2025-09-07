@@ -1,10 +1,20 @@
-//
 // Redis Serialization Protocol v3.0
 
 use std::collections::{HashMap, HashSet};
 
 use crate::{StorageValue, parser_error};
 
+/// Produces a Vec of byte representation of the `RequestType::Array` from
+/// a Vec of String expressions.
+///
+/// # Examples
+/// ```rust
+/// use libvolatix::array;
+///
+/// let names = vec!["Mike".to_string()];
+/// let arr = array!(names);
+/// assert_eq!(arr, b"*1\r\n$4\r\nMike\r\n".to_vec());
+/// ```
 #[macro_export]
 macro_rules! array {
     ($data:expr) => {
@@ -21,7 +31,7 @@ macro_rules! array {
                 s.push('$');
                 s.push_str(&entry.len().to_string());
                 s.push_str(delimeter);
-                s.push_str(entry);
+                s.push_str(&entry);
                 s.push_str(delimeter);
 
                 arr.push_str(&s);
@@ -32,6 +42,21 @@ macro_rules! array {
     }
 }
 
+/// Converts a String expression if one is provided, to a Vec of byte
+/// representation of the `RequestType::BulkString` and a `RequestType::Null`
+/// if none is provided.
+///
+/// # Examples
+/// ```rust
+/// use libvolatix::bulkstring;
+///
+/// let name = "Mike";
+/// let bulk_string = bulkstring!(Some(name));
+/// assert_eq!(bulk_string, b"$4\r\nMike\r\n".to_vec());
+///
+/// let non_string = bulkstring!(None::<&str>);
+/// assert_eq!(non_string, b"$-1\r\n".to_vec());
+/// ```
 #[macro_export]
 macro_rules! bulkstring {
     ($data:expr) => {
@@ -52,7 +77,15 @@ macro_rules! bulkstring {
     };
 }
 
-// null $-1\r\n
+/// Produces a Vec of byte representation of the `RequestType::Null`
+///
+/// # Examples
+/// ```rust
+/// use libvolatix::null;
+///
+/// let n = null!();
+/// assert_eq!(n, b"$-1\r\n".to_vec());
+/// ```
 #[macro_export]
 macro_rules! null {
     () => {
@@ -60,6 +93,17 @@ macro_rules! null {
     };
 }
 
+/// Converts a String expression to a Vec of byte representation of the
+/// `RequestType::BulkError`
+///
+/// # Examples
+/// ```rust
+/// use libvolatix::bulkerror;
+///
+/// let err = "error";
+/// let bulk_error = bulkerror!(err);
+/// assert_eq!(bulk_error, b"!5\r\nerror\r\n".to_vec());
+/// ```
 #[macro_export]
 macro_rules! bulkerror {
     ($err:expr) => {{
@@ -75,7 +119,21 @@ macro_rules! bulkerror {
     }};
 }
 
-// #<t|f>\r\n
+/// Converts a Bool expression to a Vec of byte representation of the
+/// `RequestType::Boolean`
+///
+/// # Examples
+/// ```rust
+/// use libvolatix::boolean;
+///
+/// let is_valid = true;
+/// let t = boolean!(is_valid);
+/// assert_eq!(t, b"#t\r\n".to_vec());
+///
+/// let invalid = false;
+/// let f = boolean!(invalid);
+/// assert_eq!(f, b"#f\r\n".to_vec());
+/// ```
 #[macro_export]
 macro_rules! boolean {
     ($b:expr) => {
@@ -87,7 +145,20 @@ macro_rules! boolean {
     };
 }
 
-// :[<+|- >]<value>\r\n
+/// Converts a String expression to a Vec of byte representation of the
+/// `RequestType::BulkError`
+///
+/// # Examples
+/// ```rust
+/// use libvolatix::integer;
+///
+/// let n = 10;
+/// let n_bytes = integer!(n);
+/// assert_eq!(n_bytes, b":10\r\n".to_vec());
+///
+/// let n = -10;
+/// let n_bytes = integer!(n);
+/// assert_eq!(n_bytes, b":-10\r\n".to_vec());
 #[macro_export]
 macro_rules! integer {
     ($i:expr) => {
@@ -248,7 +319,8 @@ pub enum RequestType {
         data: Vec<u8>,
     },
     VerbatimString {
-        data: Vec<Vec<u8>>,
+        encoding: Vec<u8>, // vec![u8; 3]
+        data: Vec<u8>,
     },
     Array {
         children: Vec<RequestType>,
@@ -261,6 +333,7 @@ pub enum RequestType {
     },
 }
 
+/// Identifies different RequestTypes based on their first byte.
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub enum DataType {
     SimpleString,
@@ -279,6 +352,29 @@ pub enum DataType {
     Unknown,
 }
 
+impl std::fmt::Display for DataType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DataType::SimpleString => write!(f, "SimpleString"),
+            DataType::SimpleError => write!(f, "SimpleError"),
+            DataType::Integer => write!(f, "Integer"),
+            DataType::BulkString => write!(f, "BulkString"),
+            DataType::Array => write!(f, "Array"),
+            DataType::Null => write!(f, "Null"),
+            DataType::Boolean => write!(f, "Boolean"),
+            DataType::Double => write!(f, "Double"),
+            DataType::BigNumber => write!(f, "BigNumber"),
+            DataType::BulkError => write!(f, "BulkError"),
+            DataType::VerbatimString => write!(f, "VerbatimString"),
+            DataType::Maps => write!(f, "Maps"),
+            DataType::Sets => write!(f, "Sets"),
+            DataType::Unknown => write!(f, "Unknown"),
+        }
+    }
+}
+
+/// Matches a provided byte to a known Resp datatype.
+/// Returns Unknown if the byte value is invalid or unknown.
 fn get_data_type(byte: u8) -> DataType {
     match byte {
         b'+' => DataType::SimpleString,
@@ -298,12 +394,33 @@ fn get_data_type(byte: u8) -> DataType {
     }
 }
 
+/// Parse a series of bytes into `RequestType::SimpleString`
+/// The format of simplestring bytes representation is:
+///     +<data>\r\n
+///
+/// The plus sign (+) as the first byte.
+/// The data.
+/// A final CRLF terminator.
 fn parse_simple_strings(
     data: &[u8],
     byte_offset: &mut usize,
 ) -> Result<(RequestType, usize), crate::Error> {
     let mut s = Vec::new();
     let mut i = 0;
+
+    let datatype = get_data_type(data[i]);
+    if datatype != DataType::SimpleString {
+        return parser_error!(
+            format!(
+                "Expected `{}` but found `{}`",
+                DataType::SimpleString,
+                datatype
+            ),
+            *byte_offset
+        );
+    }
+    i += 1;
+
     while i < data.len() && data[i] != b'\r' {
         s.push(data[i]);
         i += 1;
@@ -318,12 +435,33 @@ fn parse_simple_strings(
     Ok((RequestType::SimpleString { data: s }, i))
 }
 
+/// Parse a series of bytes into `RequestType::SimpleError`
+/// The format of simpleerror bytes representation is:
+///     -<data>\r\n
+///
+/// The minus sign (-) as the first byte.
+/// The data.
+/// A final CRLF terminator.
 fn parse_simple_errors(
     data: &[u8],
     byte_offset: &mut usize,
 ) -> Result<(RequestType, usize), crate::Error> {
     let mut s = Vec::new();
     let mut i = 0;
+
+    let datatype = get_data_type(data[i]);
+    if datatype != DataType::SimpleError {
+        return parser_error!(
+            format!(
+                "Expected `{}` but found `{}`",
+                DataType::SimpleError,
+                datatype
+            ),
+            *byte_offset
+        );
+    }
+    i += 1;
+
     while i < data.len() && data[i] != b'\r' {
         s.push(data[i]);
         i += 1;
@@ -338,17 +476,29 @@ fn parse_simple_errors(
     Ok((RequestType::SimpleError { data: s }, i))
 }
 
-// :[<+|->]<value>\r\n
-//
-// The colon (:) as the first byte.
-// An optional plus (+) or minus (-) as the sign.
-// One or more decimal digits (0..9) as the integer's unsigned, base-10 value.
-// The CRLF terminator.
+/// Parse a series of bytes into a `RequestType::Integer`
+/// The format of bytes representation is:
+///     :[<+|->]<value>\r\n
+///
+/// The colon (:) as the first byte.
+/// An optional plus (+) or minus (-) as the sign.
+/// One or more decimal digits (0..9) as the integer's unsigned, base-10 value.
+/// The CRLF terminator.
 fn parse_integers(
     data: &[u8],
     byte_offset: &mut usize,
 ) -> Result<(RequestType, usize), crate::Error> {
     let mut i = 0;
+
+    let datatype = get_data_type(data[i]);
+    if datatype != DataType::Integer {
+        return parser_error!(
+            format!("Expected `{}` but found `{}`", DataType::Integer, datatype),
+            *byte_offset
+        );
+    }
+    i += 1;
+
     let sign = match data[i] {
         b'-' => {
             i += 1;
@@ -384,17 +534,34 @@ fn parse_integers(
     }
 }
 
-// The dollar sign ($) as the first byte.
-// One or more decimal digits (0..9) as the string's length, in bytes,
-// as an unsigned, base-10 value.
-// The CRLF terminator.
-// The data.
-// A final CRLF.
+/// Parse a series of bytes into `RequestType::BulkString`
+/// The format of bulkstring bytes representation is:
+///     $<0..9>\r\n<data>\r\n
+///
+/// The dollar sign ($) as the first byte.
+/// One or more decimal digits (0..9) as the string's length, in bytes,
+/// as an unsigned, base-10 value.
+/// The CRLF terminator.
+/// The data.
+/// A final CRLF.
 fn parse_bulk_strings(
     data: &[u8],
     byte_offset: &mut usize,
 ) -> Result<(RequestType, usize), crate::Error> {
     let mut i = 0;
+    let datatype = get_data_type(data[i]);
+    if datatype != DataType::BulkString {
+        return parser_error!(
+            format!(
+                "Expected `{}` but found `{}`",
+                DataType::BulkString,
+                datatype
+            ),
+            *byte_offset
+        );
+    }
+    i += 1;
+
     let mut length = Vec::new();
     while i < data.len() && data[i] != b'\r' {
         length.push(data[i]);
@@ -452,18 +619,30 @@ fn parse_bulk_strings(
     ))
 }
 
-// *<number-of-elements>\r\n<element-1>...<element-n>
-//
-// An asterisk (*) as the first byte.
-// One or more decimal digits (0..9) as the number of elements in
-// the array as an unsigned, base-10 value.
-// The CRLF terminator.
-// An additional RESP type for every element of the array.
+/// Parse a series of bytes into `RequestType::Array`
+/// The format of array bytes representation is:
+/// *<number-of-elements>\r\n<element-1>...<element-n>
+///
+/// An asterisk (*) as the first byte.
+/// One or more decimal digits (0..9) as the number of elements in
+/// the array as an unsigned, base-10 value.
+/// The CRLF terminator.
+/// An additional RESP type for every element of the array.
 fn parse_arrays(
     data: &[u8],
     byte_offset: &mut usize,
 ) -> Result<(RequestType, usize), crate::Error> {
     let mut i = 0;
+
+    let datatype = get_data_type(data[i]);
+    if datatype != DataType::Array {
+        return parser_error!(
+            format!("Expected `{}` but found `{}`", DataType::Array, datatype),
+            *byte_offset
+        );
+    }
+    i += 1;
+
     let mut length = Vec::new();
     while i < data.len() && data[i] != b'\r' {
         length.push(data[i]);
@@ -502,59 +681,66 @@ fn parse_arrays(
     // Parse each element in the array
     // Make a helper function to do the handler assignments
     for _ in 0..length {
-        let elem_type = match get_data_type(data[i]) {
-            DataType::Unknown => break,
-            t => t,
-        };
-
-        i += 1;
-        *byte_offset += 1;
-
-        match elem_type {
-            DataType::Array => {
-                let (nested_elems, consumed) = parse_arrays(&data[i..], byte_offset)?;
-                elements.push(nested_elems);
-                i += consumed;
-            }
-            _ => {
-                let (content, consumed) = match elem_type {
-                    DataType::Integer => parse_integers(&data[i..], byte_offset)?,
-                    DataType::BulkString => parse_bulk_strings(&data[i..], byte_offset)?,
-                    DataType::SimpleString => parse_simple_strings(&data[i..], byte_offset)?,
-                    DataType::SimpleError => parse_simple_errors(&data[i..], byte_offset)?,
-                    DataType::Maps => parse_maps(&data[i..], byte_offset)?,
-                    _ => (RequestType::Null, 0),
-                };
-
-                i += consumed;
-                elements.push(content);
-            }
-        }
+        let (content, consumed) = match_parser_against_datatype(&data[i..], byte_offset)?;
+        elements.push(content);
+        i += consumed;
     }
 
     Ok((RequestType::Array { children: elements }, i))
 }
 
-// _\r\n
+/// Parse a series of bytes into `RequestType::Null`
+/// The format of null bytes representation is:
+///     _\r\n
+///
+/// The underscore sign (_) as the first byte.
+/// A final CRLF terminator.
 fn parse_null(data: &[u8], byte_offset: &mut usize) -> Result<(RequestType, usize), crate::Error> {
-    if data[0] == b'\r' && data[1] == b'\n' {
+    let mut i = 0;
+    let datatype = get_data_type(data[i]);
+    if datatype != DataType::Null {
+        return parser_error!(
+            format!("Expected `{}` but found `{}`", DataType::Null, datatype),
+            *byte_offset
+        );
+    }
+    i += 1;
+
+    if data[i] == b'\r' && data[i + 1] == b'\n' {
         *byte_offset += 2;
         return Ok((RequestType::Null, 2));
     }
     parser_error!("Invalid null format", *byte_offset)
 }
 
-// #<t|f>\r\n
+/// Parse a series of bytes into `RequestType::Boolean`
+/// The format of null bytes representation is:
+///     #<t|f>\r\n
+///
+/// The hash sign (#) as the first byte.
+/// A data value which is either 't' for `true` or 'f' for `false`.
+/// A final CRLF terminator.
 fn parse_booleans(
     data: &[u8],
     byte_offset: &mut usize,
 ) -> Result<(RequestType, usize), crate::Error> {
-    if (data[0] == b't') && (data[1] == b'\r' && data[2] == b'\n') {
+    let mut i = 0;
+
+    let datatype = get_data_type(data[i]);
+    if datatype != DataType::Boolean {
+        return parser_error!(
+            format!("Expected `{}` but found `{}`", DataType::Boolean, datatype),
+            *byte_offset
+        );
+    }
+    i += 1;
+
+    if (data[i] == b't') && (data[i + 1] == b'\r' && data[i + 2] == b'\n') {
         *byte_offset += 3;
         return Ok((RequestType::Boolean { data: true }, 3));
     }
 
-    if (data[0] == b'f') && (data[1] == b'\r' && data[2] == b'\n') {
+    if (data[i] == b'f') && (data[i + 1] == b'\r' && data[i + 2] == b'\n') {
         *byte_offset += 3;
         return Ok((RequestType::Boolean { data: false }, 3));
     }
@@ -562,12 +748,42 @@ fn parse_booleans(
     parser_error!("Invalid boolean format", *byte_offset)
 }
 
-// ,[<+|->]<integral>[.<fractional>][<E|e>[sign]<exponent>]\r\n
+/// Parse a series of bytes into `RequestType::Double`
+/// The format of double bytes representation is:
+///     ,[<+|->]<integral>[.<fractional>][<E|e>[sign]<exponent>]\r\n
+///     ,[<+|->]inf\r\n
+///     ,nan\r\n
+///
+/// An comma (,) as the first byte.
+///
+/// An optional plus(+) of minus(-) sign for positive and negative floating
+/// point numbers respectively.
+/// One or more decimal digits (0..9) as the first part of the floating point
+/// number.
+/// An optional dot(.) sign followed by one or more decimal digits(0..9) as the
+/// second part of the floating point number.
+/// An optional 'E' or 'e' and an optional plus(+) of minus(-) sign for positive
+/// and negative exponent values followed by one or more decimal digits(0..9) as
+/// the exponent value.
+/// The CRLF terminator.
+///
+/// The RequestType also supports positive(+), and negative(-) infinity,
+/// and NaN values
 fn parse_doubles(
     data: &[u8],
     byte_offset: &mut usize,
 ) -> Result<(RequestType, usize), crate::Error> {
     let mut i = 0;
+
+    let datatype = get_data_type(data[i]);
+    if datatype != DataType::Double {
+        return parser_error!(
+            format!("Expected `{}` but found `{}`", DataType::Double, datatype),
+            *byte_offset
+        );
+    }
+    i += 1;
+
     let num_sign = match data[i] {
         b'-' => {
             i += 1;
@@ -589,14 +805,14 @@ fn parse_doubles(
         if data[i + 3] == b'\r' && data[i + 4] == b'\n' {
             if let Some(s) = num_sign {
                 let mut v = vec![s];
-                v.extend_from_slice(&data[1..4]);
+                v.extend_from_slice(b"inf");
                 *byte_offset += 3;
                 return Ok((RequestType::Double { data: v }, 6));
             } else {
                 *byte_offset += 2;
                 return Ok((
                     RequestType::Double {
-                        data: data[..3].to_vec(),
+                        data: b"inf".to_vec(),
                     },
                     5,
                 ));
@@ -613,7 +829,7 @@ fn parse_doubles(
             *byte_offset += 2;
             return Ok((
                 RequestType::Double {
-                    data: data[..3].to_vec(),
+                    data: b"nan".to_vec(),
                 },
                 5,
             ));
@@ -713,12 +929,34 @@ fn parse_doubles(
     Ok((RequestType::Double { data: result }, i))
 }
 
-// ([+|-]<number>\r\n
+/// Parse a series of bytes into `RequestType::BigNumber`
+/// The format of bignumber bytes representation is:
+///     ([+|-]<number>\r\n
+///
+/// An opening curly brace '(' as the first byte.
+/// An optional plus(+) of minus(-) sign for positive and negative numbers
+/// respectively.
+/// One or more decimal digits (0..9) as the data.
+/// The CRLF terminator.
 fn parse_big_numbers(
     data: &[u8],
     byte_offset: &mut usize,
 ) -> Result<(RequestType, usize), crate::Error> {
     let mut i = 0;
+
+    let datatype = get_data_type(data[i]);
+    if datatype != DataType::BigNumber {
+        return parser_error!(
+            format!(
+                "Expected `{}` but found `{}`",
+                DataType::BigNumber,
+                datatype
+            ),
+            *byte_offset
+        );
+    }
+    i += 1;
+
     let sign = match data[i] {
         b'-' => {
             i += 1;
@@ -755,11 +993,35 @@ fn parse_big_numbers(
     }
 }
 
+/// Parse a series of bytes into `RequestType::BulkError`
+/// The format of bulkerror bytes representation is:
+///     !<0..9>\r\n<data>\r\n
+///
+/// An exclamation mark (!) as the first byte.
+/// One or more decimal digits (0..9) as the string's length, in bytes,
+/// as an unsigned, base-10 value.
+/// The CRLF terminator.
+/// The data.
+/// A final CRLF.
 fn parse_bulk_errors(
     data: &[u8],
     byte_offset: &mut usize,
 ) -> Result<(RequestType, usize), crate::Error> {
     let mut i = 0;
+
+    let datatype = get_data_type(data[i]);
+    if datatype != DataType::BulkError {
+        return parser_error!(
+            format!(
+                "Expected `{}` but found `{}`",
+                DataType::BulkError,
+                datatype
+            ),
+            *byte_offset
+        );
+    }
+    i += 1;
+
     let mut length = Vec::new();
     while i < data.len() && data[i] != b'\r' {
         length.push(data[i]);
@@ -820,22 +1082,40 @@ fn parse_bulk_errors(
     ))
 }
 
-// =<length>\r\n<encoding>:<data>\r\n
+/// Parse a series of bytes into `RequestType::VerbatimString`
+/// The format of verbatimstring bytes representation is:
+///     =<length>\r\n<encoding>:<data>\r\n
+///
+/// An equal sign (=) as the first byte.
+/// One or more decimal digits (0..9) as the string's length, in bytes,
+/// as an unsigned, base-10 value.
+/// The CRLF terminator.
+/// Exactly three (3) bytes representing the data's encoding.
+// FIX: Get the different types of data encodings!
 //
-// An equal sign (=) as the first byte.
-// One or more decimal digits (0..9) as the string's total length,
-// in bytes, as an unsigned, base-10 value.
-// The CRLF terminator.
-// Exactly three (3) bytes represent the data's encoding.
-// The colon (:) character separates the encoding and data.
-// The data.
-// A final CRLF.
+/// The colon (:) character separates the encoding and data.
+/// The data.
+/// A final CRLF.
 fn parse_verbatim_strings(
     data: &[u8],
     byte_offset: &mut usize,
 ) -> Result<(RequestType, usize), crate::Error> {
-    let mut len_bytes = Vec::new();
     let mut i = 0;
+
+    let datatype = get_data_type(data[i]);
+    if datatype != DataType::VerbatimString {
+        return parser_error!(
+            format!(
+                "Expected `{}` but found `{}`",
+                DataType::VerbatimString,
+                datatype
+            ),
+            *byte_offset
+        );
+    }
+    i += 1;
+
+    let mut len_bytes = Vec::new();
     while i < data.len() && data[i].is_ascii_alphanumeric() {
         len_bytes.push(data[i]);
         i += 1;
@@ -901,17 +1181,35 @@ fn parse_verbatim_strings(
 
     Ok((
         RequestType::VerbatimString {
-            data: vec![encoding, v_string],
+            encoding,
+            data: v_string,
         },
         i,
     ))
 }
 
-// %<number-of-entries>\r\n<key-1><value-1>...<key-n><value-n>
+/// Parse a series of bytes into `RequestType::Map`
+/// The format of map bytes representation is:
+///     %<number-of-entries>\r\n<key-1><value-1>...<key-n><value-n>
+///
+/// A percentage sign (%) as the first byte.
+/// One or more decimal digits (0..9) as the number of elements in the map
+/// as an unsigned, base-10 value.
+/// The CRLF terminator.
+/// An additional RESP type for every key and value pair elements of the map.
 fn parse_maps(data: &[u8], byte_offset: &mut usize) -> Result<(RequestType, usize), crate::Error> {
-    let mut len_bytes = Vec::new();
     let mut i = 0;
 
+    let datatype = get_data_type(data[i]);
+    if datatype != DataType::Maps {
+        return parser_error!(
+            format!("Expected `{}` but found `{}`", DataType::Maps, datatype),
+            *byte_offset
+        );
+    }
+    i += 1;
+
+    let mut len_bytes = Vec::new();
     while i < data.len() && data[i].is_ascii_alphanumeric() {
         len_bytes.push(data[i]);
         i += 1;
@@ -948,9 +1246,9 @@ fn parse_maps(data: &[u8], byte_offset: &mut usize) -> Result<(RequestType, usiz
     let mut entries = HashMap::with_capacity(num_of_entries);
     let mut n = 0;
     while i < data.len() && n < num_of_entries {
-        let (key, consumed) = parse_nested_entry(&data[i..], byte_offset)?;
+        let (key, consumed) = match_parser_against_datatype(&data[i..], byte_offset)?;
         i += consumed;
-        let (value, consumed) = parse_nested_entry(&data[i..], byte_offset)?;
+        let (value, consumed) = match_parser_against_datatype(&data[i..], byte_offset)?;
         i += consumed;
 
         let key = match key {
@@ -966,44 +1264,27 @@ fn parse_maps(data: &[u8], byte_offset: &mut usize) -> Result<(RequestType, usiz
     Ok((RequestType::Map { children: entries }, i))
 }
 
-fn parse_nested_entry(
-    data: &[u8],
-    byte_offset: &mut usize,
-) -> Result<(RequestType, usize), crate::Error> {
-    if data.is_empty() {
-        return Ok((RequestType::Null, 0));
-    }
-
-    let (content, consumed) = match get_data_type(data[0]) {
-        DataType::SimpleString => parse_simple_strings(&data[1..], byte_offset)?,
-        DataType::SimpleError => parse_simple_errors(&data[1..], byte_offset)?,
-        DataType::BulkString => parse_bulk_strings(&data[1..], byte_offset)?,
-        DataType::Integer => parse_integers(&data[1..], byte_offset)?,
-        DataType::Null => parse_null(&data[1..], byte_offset)?,
-        DataType::Boolean => parse_booleans(&data[1..], byte_offset)?,
-        DataType::Double => parse_doubles(&data[1..], byte_offset)?,
-        DataType::BigNumber => parse_big_numbers(&data[1..], byte_offset)?,
-        DataType::BulkError => parse_bulk_errors(&data[1..], byte_offset)?,
-        DataType::Unknown => {
-            return parser_error!("Unknown datatype", *byte_offset);
-        }
-        _ => {
-            return parser_error!(
-                "Unreachable end! This feature isn't yet implemented!",
-                *byte_offset
-            );
-        } // DataType::Array => todo!(),
-          // DataType::Maps => todo!(),
-          // DataType::Sets => todo!(),
-          // DataType::VerbatimString => todo!(),
-    };
-
-    Ok((content, consumed + 1))
-}
-
-// ~<number-of-elements>\r\n<element-1>...<element-n>
+/// Parse a series of bytes into `RequestType::Set`
+/// The format of set bytes representation is:
+///     ~<number-of-elements>\r\n<element-1>...<element-n>
+///
+/// A tilde sign (~) as the first byte.
+/// One or more decimal digits (0..9) as the number of elements in the set
+/// as an unsigned, base-10 value.
+/// The CRLF terminator.
+/// An additional RESP type for every element of the set
 fn parse_sets(data: &[u8], byte_offset: &mut usize) -> Result<(RequestType, usize), crate::Error> {
     let mut i = 0;
+
+    let datatype = get_data_type(data[i]);
+    if datatype != DataType::Sets {
+        return parser_error!(
+            format!("Expected `{}` but found `{}`", DataType::Sets, datatype),
+            *byte_offset
+        );
+    }
+    i += 1;
+
     let mut len_bytes = Vec::new();
 
     while i < data.len() && data[i].is_ascii_alphanumeric() {
@@ -1043,7 +1324,7 @@ fn parse_sets(data: &[u8], byte_offset: &mut usize) -> Result<(RequestType, usiz
 
     let mut n = 0;
     while i < data.len() && n < length {
-        let (entry, consumed) = parse_nested_entry(data, byte_offset)?;
+        let (entry, consumed) = match_parser_against_datatype(data, byte_offset)?;
         let entry = match entry {
             RequestType::BulkString { data } => data.to_vec(),
             _ => {
@@ -1059,7 +1340,40 @@ fn parse_sets(data: &[u8], byte_offset: &mut usize) -> Result<(RequestType, usiz
     Ok((RequestType::Set { children: entries }, i))
 }
 
-// Transforms a series of bytes into a RESP request type
+/// Pass data to the correct parser according the data's first byte which
+/// represents the data type.
+/// On success, Returns a RequestType represented by the data and the total
+/// consumed bytes (RequestType, Consumed).
+/// Returns an error if the data type is unknown.
+fn match_parser_against_datatype(
+    data: &[u8],
+    current_offset: &mut usize,
+) -> Result<(RequestType, usize), crate::Error> {
+    if data.is_empty() {
+        return parser_error!("Unexpected end of data!", *current_offset);
+    }
+
+    match get_data_type(data[0]) {
+        DataType::Integer => parse_integers(data, current_offset),
+        DataType::BulkString => parse_bulk_strings(data, current_offset),
+        DataType::SimpleString => parse_simple_strings(data, current_offset),
+        DataType::SimpleError => parse_simple_errors(data, current_offset),
+        DataType::Array => parse_arrays(data, current_offset),
+        DataType::Null => parse_null(data, current_offset),
+        DataType::Boolean => parse_booleans(data, current_offset),
+        DataType::Double => parse_doubles(data, current_offset),
+        DataType::BigNumber => parse_big_numbers(data, current_offset),
+        DataType::BulkError => parse_bulk_errors(data, current_offset),
+        DataType::VerbatimString => parse_verbatim_strings(data, current_offset),
+        DataType::Maps => parse_maps(data, current_offset),
+        DataType::Sets => parse_sets(data, current_offset),
+        DataType::Unknown => {
+            parser_error!("Unknown data type", *current_offset)
+        }
+    }
+}
+
+/// Transform a series of bytes into a RESP request type
 pub fn parse_request(data: &[u8]) -> Result<RequestType, crate::Error> {
     if data.is_empty() {
         return Ok(RequestType::Null);
@@ -1071,32 +1385,9 @@ pub fn parse_request(data: &[u8]) -> Result<RequestType, crate::Error> {
     // Example:
     //     Invalid character '{' at byte offset 127
     //
-    let mut byte_offset = 0;
-    let mut i = 0;
+    let mut current_offset = 0usize;
 
-    let data_type = get_data_type(data[i]);
-    i += 1;
-
-    let (content, _) = match data_type {
-        DataType::Integer => parse_integers(&data[i..], &mut byte_offset)?,
-        DataType::BulkString => parse_bulk_strings(&data[i..], &mut byte_offset)?,
-        DataType::SimpleString => parse_simple_strings(&data[i..], &mut byte_offset)?,
-        DataType::SimpleError => parse_simple_errors(&data[i..], &mut byte_offset)?,
-        DataType::Array => parse_arrays(&data[i..], &mut byte_offset)?,
-        DataType::Null => parse_null(&data[i..], &mut byte_offset)?,
-        DataType::Boolean => parse_booleans(&data[i..], &mut byte_offset)?,
-        DataType::Double => parse_doubles(&data[i..], &mut byte_offset)?,
-        DataType::BigNumber => parse_big_numbers(&data[i..], &mut byte_offset)?,
-        DataType::BulkError => parse_bulk_errors(&data[i..], &mut byte_offset)?,
-        DataType::VerbatimString => parse_verbatim_strings(&data[i..], &mut byte_offset)?,
-        DataType::Maps => parse_maps(&data[i..], &mut byte_offset)?,
-        DataType::Sets => parse_sets(&data[i..], &mut byte_offset)?,
-        DataType::Unknown => {
-            return parser_error!("Unknown data type", byte_offset);
-        }
-    };
-
-    Ok(content)
+    match_parser_against_datatype(data, &mut current_offset).map(|(content, _consumed)| content)
 }
 
 #[cfg(test)]
@@ -1114,13 +1405,13 @@ mod resp3_tests {
     fn test_booleans() {
         let n = b"#t\r\n";
         let mut offset = 0;
-        let (data, _) = parse_booleans(&n[1..], &mut offset).unwrap();
+        let (data, _) = parse_booleans(n, &mut offset).unwrap();
 
         assert_eq!(data, RequestType::Boolean { data: true });
 
         let n = b"#f\r\n";
         offset = 0;
-        let (data, _) = parse_booleans(&n[1..], &mut offset).unwrap();
+        let (data, _) = parse_booleans(n, &mut offset).unwrap();
         assert_eq!(data, RequestType::Boolean { data: false });
     }
 
@@ -1128,7 +1419,7 @@ mod resp3_tests {
     fn test_basic_doubles() {
         let n = b",1.23\r\n";
         let mut offset = 0;
-        let (data, consumed) = parse_doubles(&n[1..], &mut offset).unwrap();
+        let (data, consumed) = parse_doubles(n, &mut offset).unwrap();
 
         assert!(consumed > 0);
         assert_eq!(
@@ -1140,7 +1431,7 @@ mod resp3_tests {
 
         let n = b",+1.23\r\n";
         offset = 0;
-        let (data, consumed) = parse_doubles(&n[1..], &mut offset).unwrap();
+        let (data, consumed) = parse_doubles(n, &mut offset).unwrap();
 
         assert!(consumed > 0);
         assert_eq!(
@@ -1152,7 +1443,7 @@ mod resp3_tests {
 
         let n = b",-1.23\r\n";
         offset = 0;
-        let (data, consumed) = parse_doubles(&n[1..], &mut offset).unwrap();
+        let (data, consumed) = parse_doubles(n, &mut offset).unwrap();
 
         assert!(consumed > 0);
         assert_eq!(
@@ -1167,7 +1458,7 @@ mod resp3_tests {
     fn test_int_double() {
         let n = b",10\r\n";
         let mut offset = 0;
-        let (data, _) = parse_doubles(&n[1..], &mut offset).unwrap();
+        let (data, _) = parse_doubles(n, &mut offset).unwrap();
 
         assert_eq!(
             data,
@@ -1181,7 +1472,7 @@ mod resp3_tests {
     fn test_negative_infinity() {
         let n = b",-inf\r\n";
         let mut offset = 0;
-        let (data, _) = parse_doubles(&n[1..], &mut offset).unwrap();
+        let (data, _) = parse_doubles(n, &mut offset).unwrap();
 
         assert_eq!(
             data,
@@ -1196,7 +1487,7 @@ mod resp3_tests {
         let n = b",nan\r\n";
 
         let mut offset = 0;
-        let (data, _) = parse_doubles(&n[1..], &mut offset).unwrap();
+        let (data, _) = parse_doubles(n, &mut offset).unwrap();
 
         assert_eq!(
             data,
@@ -1211,10 +1502,10 @@ mod resp3_tests {
         let n = b"(3492890328409238509324850943850943825024385\r\n";
 
         let mut offset = 0;
-        let (data, consumed) = parse_big_numbers(&n[1..], &mut offset).unwrap();
+        let (data, consumed) = parse_big_numbers(n, &mut offset).unwrap();
         let l = n.len();
 
-        assert_eq!(consumed, l - 1);
+        assert_eq!(consumed, l);
         let expected: Vec<u8> = n[1..l - 2].to_vec();
         assert_eq!(data, RequestType::BigNumber { data: expected });
     }
@@ -1223,11 +1514,11 @@ mod resp3_tests {
     fn test_bulk_error() {
         let n = b"!21\r\nSYNTAX invalid syntax\r\n";
         let mut offset = 0;
-        let (data, consumed) = parse_bulk_errors(&n[1..], &mut offset).unwrap();
+        let (data, consumed) = parse_bulk_errors(n, &mut offset).unwrap();
 
         let l = n.len();
         let expected: Vec<u8> = n[5..l - 2].to_vec();
-        assert_eq!(consumed, l - 1);
+        assert_eq!(consumed, l);
         assert_eq!(data, RequestType::BulkError { data: expected });
     }
 
@@ -1236,11 +1527,17 @@ mod resp3_tests {
         let n = b"=15\r\ntxt:Some string\r\n";
 
         let mut offset = 0;
-        let (data, consumed) = parse_verbatim_strings(&n[1..], &mut offset).unwrap();
+        let (data, consumed) = parse_verbatim_strings(n, &mut offset).unwrap();
         let l = n.len();
-        let expected: Vec<Vec<u8>> = vec![b"txt".to_vec(), b"Some string".to_vec()];
-        assert_eq!(consumed, l - 1);
-        assert_eq!(data, RequestType::VerbatimString { data: expected });
+        let expected = b"Some string".to_vec();
+        assert_eq!(consumed, l);
+        assert_eq!(
+            data,
+            RequestType::VerbatimString {
+                encoding: b"txt".to_vec(),
+                data: expected
+            }
+        );
     }
 
     // {
@@ -1268,9 +1565,9 @@ mod resp3_tests {
             ),
         ]);
 
-        let (data, consumed) = parse_maps(&n[1..], &mut offset).unwrap();
+        let (data, consumed) = parse_maps(n, &mut offset).unwrap();
         assert_eq!(data, RequestType::Map { children: expected });
-        assert_eq!(consumed, l - 1);
+        assert_eq!(consumed, l);
     }
 
     #[test]

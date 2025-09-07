@@ -6,7 +6,7 @@ mod usage;
 use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream};
 
-pub use ::libvolatix::ascii_art;
+pub use ::libvolatix::volatix_ascii_art;
 use crossterm::{ExecutableCommand, QueueableCommand, cursor, event, terminal};
 use deserialize::{Response, deserialize_response};
 use parse::{Command, parse_line};
@@ -417,7 +417,7 @@ fn main() -> Result<(), String> {
     let mut stream = connect_server(addr)?;
 
     // Display welcome message and usage hints
-    println!("{art}", art = ascii_art());
+    println!("{art}", art = volatix_ascii_art());
     println!("If stuck try `HELP`");
     println!("To end session `QUIT` or `EXIT` or press `Esc`");
     println!("Use ↑/↓ arrows for command history");

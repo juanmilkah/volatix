@@ -10,7 +10,7 @@ mod process;
 
 use clap::Parser;
 use libvolatix::{
-    LockedStorage, Message, StorageOptions, ascii_art, handle_messages, parse_request,
+    LockedStorage, Message, StorageOptions, handle_messages, parse_request, volatix_ascii_art,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -106,7 +106,7 @@ fn get_log_file() -> anyhow::Result<PathBuf> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    println!("{art}", art = ascii_art());
+    println!("{art}", art = volatix_ascii_art());
 
     let args = Cli::parse();
     let port: u16 = args.port.unwrap_or(DEFAULT_PORT);

@@ -45,7 +45,8 @@ pub use error::*;
 pub use resp3::*;
 pub use storage::*;
 
-pub fn ascii_art() -> &'static str {
+/// Ascii representation of the word `Volatix`.
+pub fn volatix_ascii_art() -> &'static str {
     "
 ░██    ░██            ░██               ░██    ░██           
 ░██    ░██            ░██               ░██                  
