@@ -14,6 +14,7 @@ const ADDRESS: &str = "127.0.0.1:7878";
 const DEFAULT_WORKER_COUNT: usize = 4;
 const DEFAULT_BENCH_DURATION: u64 = 30;
 const DEFAULT_RATIO: f64 = 0.7; // 70% read, 30% writes
+const DEFAULT_VALUESIZE: usize = 2 * 1024;
 
 // $<length>\r\n<data>\r\n
 struct Bstring(String);
@@ -120,10 +121,10 @@ fn serialize_request(command: &Command) -> Vec<u8> {
     }
 }
 
-fn random_data() -> String {
+fn random_data(vsize: usize) -> String {
     let allowed = ('a'..='z').collect::<Vec<char>>();
     let mut data = String::new();
-    let n = rand::random_range(..(1024 * 2) as usize); //0 - 2kb data size
+    let n = rand::random_range(..vsize);
     for _ in 0..n {
         data.push(allowed[rand::random_range(..allowed.len())]);
     }
@@ -258,22 +259,36 @@ fn worker_thread(id: usize, config: &Config) {
 
 #[derive(Debug, Parser)]
 struct Cli {
-    #[arg(long = "compress", help = "Enable compression of large text/blobs")]
+    #[arg(
+        short = 'c',
+        long = "compress",
+        help = "Enable compression of large text/blobs"
+    )]
     compression: bool,
+
     #[arg(
         short = 'd',
         long = "duration",
         help = "Duration of the benchmark in seconds"
     )]
     duration: Option<u64>,
+
     #[arg(short = 'r', long = "ratio", help = "The ratio of reads to writes")]
     ratio: Option<f64>,
+
     #[arg(
         short = 'w',
         long = "workers",
         help = "Number of worker threads(actual cpu threads)"
     )]
     workers: Option<usize>,
+
+    #[arg(
+        short = 'v',
+        long = "vsize",
+        help = "Maximum size of value entries in bytes"
+    )]
+    vsize: Option<usize>,
 }
 
 fn main() {
@@ -283,6 +298,7 @@ fn main() {
     let duration_secs = args.duration.unwrap_or(DEFAULT_BENCH_DURATION);
     let mixed_ratio = args.ratio.unwrap_or(DEFAULT_RATIO);
     let compress = args.compression;
+    let vsize = args.vsize.unwrap_or(DEFAULT_VALUESIZE);
 
     println!("Starting performance test with:");
     println!("  - {thread_count} threads");
@@ -301,11 +317,11 @@ fn main() {
     let write_latencies = Arc::new(parking_lot::Mutex::new(Vec::new()));
 
     // pre generate some keys and values
-    println!("Generating data!");
+    println!("Generating key-value mock data!");
     let key_count = 100_000;
     let vals_count = 100_000;
     let keys: Vec<_> = (0..key_count).map(|_| get_key()).collect();
-    let values: Vec<_> = (0..vals_count).map(|_| random_data()).collect();
+    let values: Vec<_> = (0..vals_count).map(|_| random_data(vsize)).collect();
     let keys = Arc::new(RwLock::new(keys));
     let values = Arc::new(RwLock::new(values));
 
