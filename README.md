@@ -5,6 +5,10 @@
 
 An In memory database :)
 
+Documentation: 
+- [Server](volatix-server/README.md) 
+- [Cli](volatix-cli/README.md)
+
 ## Build the project
 
 ```bash
@@ -28,13 +32,14 @@ cargo build --release
 
 ```bash
   ./target/release/volatix-bench 
-[--duration<secs>] [--ratio<0..1>] [--workers<1..>] [--compress]
+[--duration<secs>] [--ratio<0..1>] [--workers<1..>] [--compress] [--vsize<1..>]
 ```
 Defaults: 
 - 30 secs duration
 - 0.7 mixed-ratio
 - 4 cpu worker threads
 - Compression disabled
+- 2Kb sized mock value entries.
 
 This project is licensed under the [MIT](LICENSE).
 
