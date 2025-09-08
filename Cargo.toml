@@ -52,7 +52,13 @@ serde = { workspace = true }
 tokio = { workspace = true }
 
 [profile.release]
-# debug = true
-lto = "thin"
-opt-level = "s"
-strip = true
+incremental = true
+lto = true
+opt-level = 3
+strip = "debuginfo"
+
+[profile.dev]
+debug = true
+panic = "unwind"
+opt-level = 3
+lto = true
