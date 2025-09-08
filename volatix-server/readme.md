@@ -62,30 +62,6 @@ Volatix is a Redis-compatible in-memory cache server built in Rust. It supports 
 └─────────────────────────────────────────────────────────┘
 ```
 
-### Core Components
-
-#### 1. **Storage Engine** (`storage.rs`)
-- **LockedStorage**: Thread-safe wrapper around the main storage
-- **StorageEntry**: Individual cache entries with metadata
-- **StorageValue**: Enum supporting multiple data types
-- **Eviction Policies**: LRU, LFU, Oldest, Size-aware
-- **Compression**: Automatic compression for large values
-
-#### 2. **Protocol Layer** (`resp3.rs`)
-- **RESP3 Parser**: Handles Redis Serialization Protocol v3
-- **Request Types**: Complete RESP3 data type support
-- **Response Serializer**: Converts internal data to RESP3 format
-
-#### 3. **Command Processing** (`process.rs`)
-- **Command Router**: Maps RESP3 requests to internal operations
-- **Batch Operations**: Efficient multi-key operations
-- **Configuration Management**: Runtime configuration updates
-
-#### 4. **Network Layer** (`main.rs`)
-- **Async TCP Server**: Built on Tokio for high concurrency
-- **Connection Handling**: Per-client async tasks
-- **Graceful Shutdown**: Signal handling and cleanup
-
 ## Features
 
 ### Core Features
