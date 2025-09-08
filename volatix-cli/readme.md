@@ -21,19 +21,16 @@ The Volatix CLI follows a modular architecture with clear separation of concerns
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
 │   User Input    │───▶│  Command Parser │───▶│   Serializer    │
-│     (REPL)      │    │   (parse.rs)    │    │ (serialize.rs)  │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
                                                         │
                                                         ▼
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
 │ Response Format │◀───│  Deserializer   │◀───│  TCP Transport  │
-│   (Display)     │    │(deserialize.rs) │    │   (main.rs)     │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
                                                         │
                                                         ▼
                                                ┌─────────────────┐
                                                │ Volatix Server  │
-                                               │  (TCP Socket)   │
                                                └─────────────────┘
 ```
 
@@ -56,7 +53,8 @@ The Volatix CLI follows a modular architecture with clear separation of concerns
 
 ## Usage
 
-The CLI will attempt to connect to a Volatix server at `127.0.0.1:7878`. Ensure the Volatix server is running before starting the CLI.
+The CLI will attempt to connect to a Volatix server at `127.0.0.1:7878`.  
+Ensure the Volatix server is running before starting the CLI.
 
 ### Command Examples
 
@@ -137,10 +135,10 @@ The CLI provides descriptive error messages:
 
 ```bash
 volatix> SET
-ERROR: SET: Missing key
+ERROR: SET: Missing key at byte offset 3
 
 volatix> GET "unclosed
-ERROR: GET: Unclosed quote for key
+ERROR: GET: Unclosed quote for key at byte offset 13
 
 volatix> INVALIDCMD
 ERROR: Unknown command: INVALIDCMD
@@ -155,4 +153,4 @@ ERROR: Unknown command: INVALIDCMD
 
 ### Performance Considerations
 - The CLI uses a 1MB buffer for responses
-- Large batch operations may require server-side limits
+- Large batch operations may require server-side limits (work in progress).
