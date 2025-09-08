@@ -243,8 +243,11 @@ pub fn storagevalue_to_string(value: &StorageValue) -> String {
     }
 }
 
-// *<number-of-elements>\r\n<element-1>...<element-n>
-//  [[key, value|null], [key, value|null]]
+/// Handles the transformation of the result from `Storage::get_entries()` to
+/// a nested array `RequestType` structure.
+/// Format:
+///     [[key, value|null], [key, value|null]]
+/// The result is a vec of bytes of the string representation.
 #[macro_export]
 macro_rules! batch_getlist_entries {
     ($data:expr) => {
@@ -253,6 +256,7 @@ macro_rules! batch_getlist_entries {
                 return null!();
             }
 
+            // *<number-of-elements>\r\n<element-1>...<element-n>
             let mut outer_vec = String::new();
             outer_vec.push('*');
             outer_vec.push_str(&$data.len().to_string());

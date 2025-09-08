@@ -35,6 +35,15 @@ impl From<Error> for io::Error {
     }
 }
 
+impl Inner {
+    pub fn message(&self) -> String {
+        match self {
+            Inner::ParserError { message, offset: _ } => message.clone(),
+            Inner::StorageError { message } => message.clone(),
+        }
+    }
+}
+
 /// Converts a error message to an Error with inner type ParserError.
 #[macro_export]
 macro_rules! parser_error {
@@ -75,15 +84,7 @@ macro_rules! storage_error {
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.inner {
-            Inner::ParserError { message, offset: _ } => {
-                // FIX: Figure out a better way to implement this
-                write!(f, "{message}")
-            }
-            Inner::StorageError { message } => {
-                write!(f, "{message}")
-            }
-        }
+        write!(f, "{}", self.inner.message())
     }
 }
 
@@ -100,6 +101,8 @@ pub enum Message {
     Break,
 }
 
+/// Writes log messages to disk
+/// The function exits if the handler receives a `Message::Break`.
 pub async fn handle_messages(
     log_file: &Path,
     mut handler: Receiver<Message>,

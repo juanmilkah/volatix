@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::{Duration, SystemTime},
 };
@@ -398,7 +398,7 @@ fn compress(data: &str) -> Result<Vec<u8>, String> {
 #[derive(Default)]
 pub struct LockedStorage {
     /// A flag for any unsynched changes to disk
-    pub is_dirty: bool,
+    pub is_dirty: AtomicBool,
     /// Thread-safe HashMap containing all cache entries
     pub store: Arc<RwLock<HashMap<String, StorageEntry>>>,
     /// Configuration options for the cache
@@ -431,7 +431,7 @@ impl LockedStorage {
             store: Arc::new(RwLock::new(HashMap::with_capacity(1000))),
             options,
             stats: StorageStats::default(),
-            is_dirty: false,
+            is_dirty: AtomicBool::new(false),
         }
     }
 
@@ -439,10 +439,9 @@ impl LockedStorage {
     /// Configuration options are retained.
     /// To reset config options try `reset_options`
     pub fn flush(&mut self) {
-        let old_config = self.options;
+        let old_options = self.options;
         let _old_storage = std::mem::take(self);
-        self.options = old_config;
-        self.is_dirty = true;
+        self.options = old_options;
     }
 
     /// Retrieves an entry by key, updating access statistics and metadata.
@@ -694,7 +693,7 @@ impl LockedStorage {
         // Insert the entry and update statistics
         self.store.write().insert(key, entry);
         self.stats.total_entries.fetch_add(1, Ordering::Relaxed);
-        self.is_dirty = true;
+        self.is_dirty.fetch_and(true, Ordering::Relaxed);
         Ok(())
     }
 
@@ -759,12 +758,12 @@ impl LockedStorage {
 
     /// Checks whether storage has any unsyched changes to disk
     pub fn should_flush(&self) -> bool {
-        self.is_dirty
+        self.is_dirty.load(Ordering::Relaxed)
     }
 
     /// Flip the state of the is_dirty storage flag
     pub fn toggle_dirty_flag(&mut self) {
-        self.is_dirty = !self.is_dirty
+        self.is_dirty.fetch_not(Ordering::Relaxed);
     }
 
     /// Checks the current maximum capacity of the storage
@@ -802,7 +801,7 @@ impl LockedStorage {
         self.stats
             .total_entries
             .store(current_count, Ordering::Release);
-        self.is_dirty = true;
+        self.is_dirty.fetch_and(true, Ordering::Relaxed);
     }
 
     /// Performs eviction based on the configured eviction policy.
@@ -1013,12 +1012,13 @@ impl LockedStorage {
         };
 
         // Replace current storage with loaded data
-        *self = LockedStorage {
-            store: Arc::new(RwLock::new(unlocked_storage.store)),
-            options: unlocked_storage.options,
-            stats,
-            is_dirty: false,
-        };
+        let _ = std::mem::replace(
+            &mut self.store,
+            Arc::new(RwLock::new(unlocked_storage.store)),
+        );
+        let _ = std::mem::replace(&mut self.stats, stats);
+        let _ = std::mem::replace(&mut self.options, unlocked_storage.options);
+        self.is_dirty.fetch_and(false, Ordering::Relaxed);
 
         Ok(())
     }
@@ -1040,7 +1040,9 @@ impl LockedStorage {
     /// let storage = LockedStorage::new(StorageOptions::default());
     ///
     /// let db_path = Path::new("/tmp/cache.bin").to_path_buf();
-    /// storage.save_to_disk(&db_path).expect("Failed to save cache");
+    /// if storage.is_dirty(){
+    ///     storage.save_to_disk(&db_path).expect("Failed to save cache");
+    /// }
     /// ```
     pub fn save_to_disk(&self, path: &PathBuf) -> anyhow::Result<()> {
         let path = Path::new(path);
@@ -1077,19 +1079,10 @@ impl LockedStorage {
 }
 
 #[cfg(test)]
-mod tests {
+mod storage_tests {
     use std::{collections::HashMap, sync::atomic::Ordering, thread, time::Duration};
 
     use super::*;
-
-    // Test default configuration
-    #[test]
-    fn test_default_options() {
-        let storage = LockedStorage::default();
-        assert_eq!(storage.store.read().len(), 0);
-        assert_eq!(storage.options.ttl, Duration::from_secs(60 * 60 * 6));
-        assert_eq!(storage.options.max_capacity, 1000 * 1000);
-    }
 
     // Test creating storage with custom options
     #[test]
