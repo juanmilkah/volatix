@@ -5,8 +5,8 @@ use std::{
     io::{self, BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
     sync::{
-        Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
     },
     time::{Duration, SystemTime},
 };
@@ -1040,7 +1040,7 @@ impl LockedStorage {
     /// let storage = LockedStorage::new(StorageOptions::default());
     ///
     /// let db_path = Path::new("/tmp/cache.bin").to_path_buf();
-    /// if storage.is_dirty(){
+    /// if storage.should_flush() {
     ///     storage.save_to_disk(&db_path).expect("Failed to save cache");
     /// }
     /// ```
