@@ -337,6 +337,7 @@ name = "libvolatix"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "parking_lot",
  "tokio",
 ]
 
