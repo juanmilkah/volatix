@@ -297,44 +297,44 @@ macro_rules! batch_getlist_entries {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum RequestType {
+pub enum RequestType<'re> {
     SimpleString {
-        data: Vec<u8>,
+        data: &'re [u8],
     },
     SimpleError {
-        data: Vec<u8>,
+        data: &'re [u8],
     },
     Integer {
-        data: Vec<u8>,
+        data: &'re [u8],
     },
     BulkString {
-        data: Vec<u8>,
+        data: &'re [u8],
     },
     Null,
     Boolean {
         data: bool,
     },
     Double {
-        data: Vec<u8>,
+        data: &'re [u8],
     },
     BigNumber {
-        data: Vec<u8>,
+        data: &'re [u8],
     },
     BulkError {
-        data: Vec<u8>,
+        data: &'re [u8],
     },
     VerbatimString {
-        encoding: Vec<u8>, // vec![u8; 3]
-        data: Vec<u8>,
+        encoding: &'re [u8],
+        data: &'re [u8],
     },
     Array {
-        children: Vec<RequestType>,
+        children: Vec<RequestType<'re>>,
     },
     Map {
-        children: HashMap<String, RequestType>,
+        children: HashMap<String, RequestType<'re>>,
     },
     Set {
-        children: HashSet<Vec<u8>>,
+        children: HashSet<&'re [u8]>,
     },
 }
 
@@ -406,11 +406,10 @@ fn get_data_type(byte: u8) -> DataType {
 /// The plus sign (+) as the first byte.
 /// The data.
 /// A final CRLF terminator.
-fn parse_simple_strings(
-    data: &[u8],
+fn parse_simple_strings<'re>(
+    data: &'re [u8],
     byte_offset: &mut usize,
-) -> Result<(RequestType, usize), crate::Error> {
-    let mut s = Vec::new();
+) -> Result<(RequestType<'re>, usize), crate::Error> {
     let mut i = 0;
 
     let datatype = get_data_type(data[i]);
@@ -425,19 +424,27 @@ fn parse_simple_strings(
         );
     }
     i += 1;
+    let start = i;
 
     while i < data.len() && data[i] != b'\r' {
-        s.push(data[i]);
         i += 1;
     }
+    let end = i;
+
     *byte_offset += i;
+
     if i >= data.len() || i + 1 >= data.len() || data[i] != b'\r' || data[i + 1] != b'\n' {
         return parser_error!("No proper termination", *byte_offset);
     }
 
     i += 2;
     *byte_offset += 2;
-    Ok((RequestType::SimpleString { data: s }, i))
+    Ok((
+        RequestType::SimpleString {
+            data: &data[start..end],
+        },
+        i,
+    ))
 }
 
 /// Parse a series of bytes into `RequestType::SimpleError`
@@ -447,11 +454,10 @@ fn parse_simple_strings(
 /// The minus sign (-) as the first byte.
 /// The data.
 /// A final CRLF terminator.
-fn parse_simple_errors(
-    data: &[u8],
+fn parse_simple_errors<'re>(
+    data: &'re [u8],
     byte_offset: &mut usize,
-) -> Result<(RequestType, usize), crate::Error> {
-    let mut s = Vec::new();
+) -> Result<(RequestType<'re>, usize), crate::Error> {
     let mut i = 0;
 
     let datatype = get_data_type(data[i]);
@@ -466,19 +472,26 @@ fn parse_simple_errors(
         );
     }
     i += 1;
+    let start = i;
 
     while i < data.len() && data[i] != b'\r' {
-        s.push(data[i]);
         i += 1;
     }
+    let end = i;
     *byte_offset += i;
+
     if i >= data.len() || i + 1 >= data.len() || data[i] != b'\r' || data[i + 1] != b'\n' {
         return parser_error!("No proper termination", *byte_offset);
     }
 
     i += 2;
     *byte_offset += 2;
-    Ok((RequestType::SimpleError { data: s }, i))
+    Ok((
+        RequestType::SimpleError {
+            data: &data[start..end],
+        },
+        i,
+    ))
 }
 
 /// Parse a series of bytes into a `RequestType::Integer`
@@ -489,10 +502,10 @@ fn parse_simple_errors(
 /// An optional plus (+) or minus (-) as the sign.
 /// One or more decimal digits (0..9) as the integer's unsigned, base-10 value.
 /// The CRLF terminator.
-fn parse_integers(
-    data: &[u8],
+fn parse_integers<'re>(
+    data: &'re [u8],
     byte_offset: &mut usize,
-) -> Result<(RequestType, usize), crate::Error> {
+) -> Result<(RequestType<'re>, usize), crate::Error> {
     let mut i = 0;
 
     let datatype = get_data_type(data[i]);
@@ -503,24 +516,12 @@ fn parse_integers(
         );
     }
     i += 1;
+    let start = i;
 
-    let sign = match data[i] {
-        b'-' => {
-            i += 1;
-            Some(b'-')
-        }
-        b'+' => {
-            i += 1;
-            Some(b'+')
-        }
-        _ => None,
-    };
-
-    let mut num_bytes = Vec::new();
     while i < data.len() && data[i] != b'\r' {
-        num_bytes.push(data[i]);
         i += 1;
     }
+    let end = i;
 
     if i >= data.len() || i + 1 >= data.len() || data[i] != b'\r' || data[i + 1] != b'\n' {
         *byte_offset += i;
@@ -529,14 +530,12 @@ fn parse_integers(
 
     i += 2;
     *byte_offset += i;
-    match sign {
-        Some(s) => {
-            let mut v = vec![s];
-            v.extend_from_slice(&num_bytes);
-            Ok((RequestType::Integer { data: v }, i))
-        }
-        None => Ok((RequestType::Integer { data: num_bytes }, i)),
-    }
+    Ok((
+        RequestType::Integer {
+            data: &data[start..end],
+        },
+        i,
+    ))
 }
 
 /// Parse a series of bytes into `RequestType::BulkString`
@@ -549,10 +548,10 @@ fn parse_integers(
 /// The CRLF terminator.
 /// The data.
 /// A final CRLF.
-fn parse_bulk_strings(
-    data: &[u8],
+fn parse_bulk_strings<'re>(
+    data: &'re [u8],
     byte_offset: &mut usize,
-) -> Result<(RequestType, usize), crate::Error> {
+) -> Result<(RequestType<'re>, usize), crate::Error> {
     let mut i = 0;
     let datatype = get_data_type(data[i]);
     if datatype != DataType::BulkString {
@@ -616,12 +615,7 @@ fn parse_bulk_strings(
 
     i += 2;
     *byte_offset += 2;
-    Ok((
-        RequestType::BulkString {
-            data: content.to_vec(),
-        },
-        i,
-    ))
+    Ok((RequestType::BulkString { data: content }, i))
 }
 
 /// Parse a series of bytes into `RequestType::Array`
@@ -633,10 +627,10 @@ fn parse_bulk_strings(
 /// the array as an unsigned, base-10 value.
 /// The CRLF terminator.
 /// An additional RESP type for every element of the array.
-fn parse_arrays(
-    data: &[u8],
+fn parse_arrays<'re>(
+    data: &'re [u8],
     byte_offset: &mut usize,
-) -> Result<(RequestType, usize), crate::Error> {
+) -> Result<(RequestType<'re>, usize), crate::Error> {
     let mut i = 0;
 
     let datatype = get_data_type(data[i]);
@@ -700,7 +694,10 @@ fn parse_arrays(
 ///
 /// The underscore sign (_) as the first byte.
 /// A final CRLF terminator.
-fn parse_null(data: &[u8], byte_offset: &mut usize) -> Result<(RequestType, usize), crate::Error> {
+fn parse_null<'re>(
+    data: &'re [u8],
+    byte_offset: &mut usize,
+) -> Result<(RequestType<'re>, usize), crate::Error> {
     let mut i = 0;
     let datatype = get_data_type(data[i]);
     if datatype != DataType::Null {
@@ -725,10 +722,10 @@ fn parse_null(data: &[u8], byte_offset: &mut usize) -> Result<(RequestType, usiz
 /// The hash sign (#) as the first byte.
 /// A data value which is either 't' for `true` or 'f' for `false`.
 /// A final CRLF terminator.
-fn parse_booleans(
-    data: &[u8],
+fn parse_booleans<'re>(
+    data: &'re [u8],
     byte_offset: &mut usize,
-) -> Result<(RequestType, usize), crate::Error> {
+) -> Result<(RequestType<'re>, usize), crate::Error> {
     let mut i = 0;
 
     let datatype = get_data_type(data[i]);
@@ -774,10 +771,10 @@ fn parse_booleans(
 ///
 /// The RequestType also supports positive(+), and negative(-) infinity,
 /// and NaN values
-fn parse_doubles(
-    data: &[u8],
+fn parse_doubles<'re>(
+    data: &'re [u8],
     byte_offset: &mut usize,
-) -> Result<(RequestType, usize), crate::Error> {
+) -> Result<(RequestType<'re>, usize), crate::Error> {
     let mut i = 0;
 
     let datatype = get_data_type(data[i]);
@@ -788,55 +785,49 @@ fn parse_doubles(
         );
     }
     i += 1;
+    *byte_offset += 1;
 
-    let num_sign = match data[i] {
-        b'-' => {
+    let start = i;
+    match data[i] {
+        b'+' | b'-' => {
             i += 1;
-            Some(b'-')
+            *byte_offset += 1;
         }
-        b'+' => {
-            i += 1;
-            Some(b'+')
-        }
-        _ => None,
-    };
-    *byte_offset += i;
-
-    let mut num_bytes = Vec::new();
+        _ => {}
+    }
 
     // ,inf\r\n
     if data[i] == b'i' && data[i + 1] == b'n' && data[i + 2] == b'f' {
         *byte_offset += 3;
+        i += 3;
+        let end = i;
         if data[i + 3] == b'\r' && data[i + 4] == b'\n' {
-            if let Some(s) = num_sign {
-                let mut v = vec![s];
-                v.extend_from_slice(b"inf");
-                *byte_offset += 3;
-                return Ok((RequestType::Double { data: v }, 6));
-            } else {
-                *byte_offset += 2;
-                return Ok((
-                    RequestType::Double {
-                        data: b"inf".to_vec(),
-                    },
-                    5,
-                ));
-            }
+            *byte_offset += 2;
+            i += 2;
+            return Ok((
+                RequestType::Double {
+                    data: &data[start..end],
+                },
+                i,
+            ));
         } else {
             return parser_error!("Unterminated infinite", *byte_offset);
         }
     }
 
     // ,nan\r\n
-    if data[i] == b'n' && data[i + 1] == b'a' && data[i + 2] == b'n' && num_sign.is_none() {
+    if data[i] == b'n' && data[i + 1] == b'a' && data[i + 2] == b'n' {
         *byte_offset += 3;
+        i += 3;
+        let end = i;
         if data[i + 3] == b'\r' && data[i + 4] == b'\n' {
             *byte_offset += 2;
+            i += 2;
             return Ok((
                 RequestType::Double {
-                    data: b"nan".to_vec(),
+                    data: &data[start..end],
                 },
-                5,
+                i,
             ));
         } else {
             return parser_error!("Unterminated NaN value", *byte_offset);
@@ -844,7 +835,6 @@ fn parse_doubles(
     }
 
     while i < data.len() && data[i].is_ascii_alphanumeric() {
-        num_bytes.push(data[i]);
         i += 1;
         *byte_offset += 1;
     }
@@ -861,51 +851,25 @@ fn parse_doubles(
     if dot.is_none() {
         if data[i] == b'\r' && data[i + 1] == b'\n' {
             *byte_offset += 2;
-            if let Some(s) = num_sign {
-                let mut v = vec![s];
-                v.append(&mut num_bytes);
-                return Ok((RequestType::Double { data: v }, i));
-            }
-            return Ok((RequestType::Double { data: num_bytes }, i));
+            i += 2;
+            let end = i;
+            return Ok((
+                RequestType::Double {
+                    data: &data[start..end],
+                },
+                i,
+            ));
         } else {
             return parser_error!("unterminated double", *byte_offset);
         }
     }
 
-    let e = match data[i] {
-        b'e' => {
-            i += 1;
-            *byte_offset += 1;
-            Some(b'e')
-        }
-        b'E' => {
-            i += 1;
-            *byte_offset += 1;
-            Some(b'E')
-        }
-        _ => None,
-    };
-
-    let fraction_sign = match data[i] {
-        b'-' => {
-            i += 1;
-            *byte_offset += 1;
-            Some(b'-')
-        }
-        _ => None,
-    };
-
-    let mut fraction = Vec::new();
     while i < data.len() && data[i].is_ascii_alphanumeric() {
-        fraction.push(data[i]);
         i += 1;
         *byte_offset += 1;
     }
 
-    if i > data.len() {
-        return parser_error!("unterminated double", *byte_offset);
-    }
-
+    let end = i;
     if data[i] == b'\r' && data[i + 1] == b'\n' {
         *byte_offset += 2;
         i += 2;
@@ -913,25 +877,12 @@ fn parse_doubles(
         return parser_error!("unterminated double", *byte_offset);
     }
 
-    let mut result = Vec::new();
-    if let Some(s) = num_sign {
-        result.push(s);
-    }
-
-    result.extend_from_slice(&num_bytes);
-    if let Some(d) = dot {
-        result.push(d);
-    }
-    if let Some(v) = e {
-        result.push(v);
-    }
-    if let Some(s) = fraction_sign {
-        result.push(s);
-    }
-
-    result.extend_from_slice(&fraction);
-
-    Ok((RequestType::Double { data: result }, i))
+    Ok((
+        RequestType::Double {
+            data: &data[start..end],
+        },
+        i,
+    ))
 }
 
 /// Parse a series of bytes into `RequestType::BigNumber`
@@ -943,10 +894,10 @@ fn parse_doubles(
 /// respectively.
 /// One or more decimal digits (0..9) as the data.
 /// The CRLF terminator.
-fn parse_big_numbers(
-    data: &[u8],
+fn parse_big_numbers<'re>(
+    data: &'re [u8],
     byte_offset: &mut usize,
-) -> Result<(RequestType, usize), crate::Error> {
+) -> Result<(RequestType<'re>, usize), crate::Error> {
     let mut i = 0;
 
     let datatype = get_data_type(data[i]);
@@ -961,41 +912,28 @@ fn parse_big_numbers(
         );
     }
     i += 1;
+    let start = i;
 
-    let sign = match data[i] {
-        b'-' => {
-            i += 1;
-            Some(b'-')
-        }
-        b'+' => {
-            i += 1;
-            Some(b'+')
-        }
-        _ => None,
-    };
     *byte_offset += i;
 
-    let mut num_bytes = Vec::new();
-
     while i < data.len() && data[i].is_ascii_alphanumeric() {
-        num_bytes.push(data[i]);
         i += 1;
         *byte_offset += 1;
     }
 
+    let end = i;
     if data[i] != b'\r' && data[i + 1] != b'\n' {
         return parser_error!("Unterminated big number", *byte_offset);
     }
     i += 2;
     *byte_offset += 2;
 
-    if let Some(s) = sign {
-        let mut v = vec![s];
-        v.extend_from_slice(&num_bytes);
-        Ok((RequestType::BigNumber { data: v }, i))
-    } else {
-        Ok((RequestType::BigNumber { data: num_bytes }, i))
-    }
+    Ok((
+        RequestType::BigNumber {
+            data: &data[start..end],
+        },
+        i,
+    ))
 }
 
 /// Parse a series of bytes into `RequestType::BulkError`
@@ -1008,10 +946,10 @@ fn parse_big_numbers(
 /// The CRLF terminator.
 /// The data.
 /// A final CRLF.
-fn parse_bulk_errors(
-    data: &[u8],
+fn parse_bulk_errors<'re>(
+    data: &'re [u8],
     byte_offset: &mut usize,
-) -> Result<(RequestType, usize), crate::Error> {
+) -> Result<(RequestType<'re>, usize), crate::Error> {
     let mut i = 0;
 
     let datatype = get_data_type(data[i]);
@@ -1079,12 +1017,7 @@ fn parse_bulk_errors(
 
     i += 2;
     *byte_offset += 2;
-    Ok((
-        RequestType::BulkError {
-            data: content.to_vec(),
-        },
-        i,
-    ))
+    Ok((RequestType::BulkError { data: content }, i))
 }
 
 /// Parse a series of bytes into `RequestType::VerbatimString`
@@ -1101,10 +1034,10 @@ fn parse_bulk_errors(
 /// The colon (:) character separates the encoding and data.
 /// The data.
 /// A final CRLF.
-fn parse_verbatim_strings(
-    data: &[u8],
+fn parse_verbatim_strings<'re>(
+    data: &'re [u8],
     byte_offset: &mut usize,
-) -> Result<(RequestType, usize), crate::Error> {
+) -> Result<(RequestType<'re>, usize), crate::Error> {
     let mut i = 0;
 
     let datatype = get_data_type(data[i]);
@@ -1161,7 +1094,7 @@ fn parse_verbatim_strings(
         return parser_error!("Missing encoding", *byte_offset);
     }
 
-    let encoding = data[i..i + 3].to_vec();
+    let encoding = &data[i..i + 3];
     i += 3;
     *byte_offset += 3;
 
@@ -1172,7 +1105,7 @@ fn parse_verbatim_strings(
     *byte_offset += 1;
 
     // why minus 4? Encoding + colon
-    let v_string = data[i..i + s_len - 4].to_vec();
+    let v_string = &data[i..i + s_len - 4];
 
     let diff = s_len - 4;
     i += diff;
@@ -1202,7 +1135,10 @@ fn parse_verbatim_strings(
 /// as an unsigned, base-10 value.
 /// The CRLF terminator.
 /// An additional RESP type for every key and value pair elements of the map.
-fn parse_maps(data: &[u8], byte_offset: &mut usize) -> Result<(RequestType, usize), crate::Error> {
+fn parse_maps<'re>(
+    data: &'re [u8],
+    byte_offset: &mut usize,
+) -> Result<(RequestType<'re>, usize), crate::Error> {
     let mut i = 0;
 
     let datatype = get_data_type(data[i]);
@@ -1278,7 +1214,10 @@ fn parse_maps(data: &[u8], byte_offset: &mut usize) -> Result<(RequestType, usiz
 /// as an unsigned, base-10 value.
 /// The CRLF terminator.
 /// An additional RESP type for every element of the set
-fn parse_sets(data: &[u8], byte_offset: &mut usize) -> Result<(RequestType, usize), crate::Error> {
+fn parse_sets<'re>(
+    data: &'re [u8],
+    byte_offset: &mut usize,
+) -> Result<(RequestType<'re>, usize), crate::Error> {
     let mut i = 0;
 
     let datatype = get_data_type(data[i]);
@@ -1331,7 +1270,7 @@ fn parse_sets(data: &[u8], byte_offset: &mut usize) -> Result<(RequestType, usiz
     while i < data.len() && n < length {
         let (entry, consumed) = match_parser_against_datatype(data, byte_offset)?;
         let entry = match entry {
-            RequestType::BulkString { data } => data.to_vec(),
+            RequestType::BulkString { data } => data,
             _ => {
                 return parser_error!("Invalid set entry data type", *byte_offset);
             }
@@ -1350,10 +1289,10 @@ fn parse_sets(data: &[u8], byte_offset: &mut usize) -> Result<(RequestType, usiz
 /// On success, Returns a RequestType represented by the data and the total
 /// consumed bytes (RequestType, Consumed).
 /// Returns an error if the data type is unknown.
-fn match_parser_against_datatype(
-    data: &[u8],
+fn match_parser_against_datatype<'re>(
+    data: &'re [u8],
     current_offset: &mut usize,
-) -> Result<(RequestType, usize), crate::Error> {
+) -> Result<(RequestType<'re>, usize), crate::Error> {
     if data.is_empty() {
         return parser_error!("Unexpected end of data!", *current_offset);
     }
@@ -1379,7 +1318,7 @@ fn match_parser_against_datatype(
 }
 
 /// Transform a series of bytes into a RESP request type
-pub fn parse_request(data: &[u8]) -> Result<RequestType, crate::Error> {
+pub fn parse_request<'re>(data: &'re [u8]) -> Result<RequestType<'re>, crate::Error> {
     if data.is_empty() {
         return Ok(RequestType::Null);
     }
@@ -1430,7 +1369,7 @@ mod resp3_tests {
         assert_eq!(
             data,
             RequestType::Double {
-                data: vec![b'1', b'.', b'2', b'3']
+                data: &[b'1', b'.', b'2', b'3']
             }
         );
 
@@ -1442,7 +1381,7 @@ mod resp3_tests {
         assert_eq!(
             data,
             RequestType::Double {
-                data: vec![b'+', b'1', b'.', b'2', b'3']
+                data: &[b'+', b'1', b'.', b'2', b'3']
             }
         );
 
@@ -1454,7 +1393,7 @@ mod resp3_tests {
         assert_eq!(
             data,
             RequestType::Double {
-                data: vec![b'-', b'1', b'.', b'2', b'3']
+                data: &[b'-', b'1', b'.', b'2', b'3']
             }
         );
     }
@@ -1468,7 +1407,7 @@ mod resp3_tests {
         assert_eq!(
             data,
             RequestType::Double {
-                data: vec![b'1', b'0']
+                data: &[b'1', b'0']
             }
         );
     }
@@ -1482,7 +1421,7 @@ mod resp3_tests {
         assert_eq!(
             data,
             RequestType::Double {
-                data: vec![b'-', b'i', b'n', b'f']
+                data: &[b'-', b'i', b'n', b'f']
             }
         );
     }
@@ -1497,7 +1436,7 @@ mod resp3_tests {
         assert_eq!(
             data,
             RequestType::Double {
-                data: vec![b'n', b'a', b'n']
+                data: &[b'n', b'a', b'n']
             }
         );
     }
@@ -1511,7 +1450,7 @@ mod resp3_tests {
         let l = n.len();
 
         assert_eq!(consumed, l);
-        let expected: Vec<u8> = n[1..l - 2].to_vec();
+        let expected = &n[1..l - 2];
         assert_eq!(data, RequestType::BigNumber { data: expected });
     }
 
@@ -1522,7 +1461,7 @@ mod resp3_tests {
         let (data, consumed) = parse_bulk_errors(n, &mut offset).unwrap();
 
         let l = n.len();
-        let expected: Vec<u8> = n[5..l - 2].to_vec();
+        let expected = &n[5..l - 2];
         assert_eq!(consumed, l);
         assert_eq!(data, RequestType::BulkError { data: expected });
     }
@@ -1534,12 +1473,12 @@ mod resp3_tests {
         let mut offset = 0;
         let (data, consumed) = parse_verbatim_strings(n, &mut offset).unwrap();
         let l = n.len();
-        let expected = b"Some string".to_vec();
+        let expected = b"Some string";
         assert_eq!(consumed, l);
         assert_eq!(
             data,
             RequestType::VerbatimString {
-                encoding: b"txt".to_vec(),
+                encoding: b"txt",
                 data: expected
             }
         );
@@ -1556,18 +1495,8 @@ mod resp3_tests {
         let l = n.len();
 
         let expected = HashMap::from([
-            (
-                "first".to_string(),
-                RequestType::Integer {
-                    data: b"1".to_vec(),
-                },
-            ),
-            (
-                "second".to_string(),
-                RequestType::Integer {
-                    data: b"2".to_vec(),
-                },
-            ),
+            ("first".to_string(), RequestType::Integer { data: b"1" }),
+            ("second".to_string(), RequestType::Integer { data: b"2" }),
         ]);
 
         let (data, consumed) = parse_maps(n, &mut offset).unwrap();
@@ -1582,7 +1511,7 @@ mod resp3_tests {
         assert_eq!(
             result,
             RequestType::SimpleString {
-                data: vec![b'O', b'K'],
+                data: &[b'O', b'K'],
             }
         )
     }
@@ -1594,7 +1523,7 @@ mod resp3_tests {
         assert_eq!(
             result,
             RequestType::SimpleError {
-                data: vec![b'E', b'r', b'r', b'o', b'r'],
+                data: &[b'E', b'r', b'r', b'o', b'r'],
             }
         )
     }
@@ -1603,7 +1532,7 @@ mod resp3_tests {
     fn t_parse_simple_integer() {
         let s = b":0\r\n";
         let result = parse_request(s).unwrap();
-        assert_eq!(result, RequestType::Integer { data: vec![b'0'] })
+        assert_eq!(result, RequestType::Integer { data: &[b'0'] })
     }
 
     #[test]
@@ -1613,7 +1542,7 @@ mod resp3_tests {
         assert_eq!(
             result,
             RequestType::Integer {
-                data: vec![b'2', b'4', b'5', b'6', b'7', b'0'],
+                data: &[b'2', b'4', b'5', b'6', b'7', b'0'],
             }
         )
     }
@@ -1626,7 +1555,7 @@ mod resp3_tests {
         assert_eq!(
             result,
             RequestType::Integer {
-                data: vec![b'-', b'2', b'4', b'5', b'6', b'7', b'0'],
+                data: &[b'-', b'2', b'4', b'5', b'6', b'7', b'0'],
             }
         )
     }
@@ -1635,7 +1564,7 @@ mod resp3_tests {
     fn t_parse_empty_bstring() {
         let s = b"$0\r\n\r\n";
         let result = parse_request(s).unwrap();
-        assert_eq!(result, RequestType::BulkString { data: vec![] });
+        assert_eq!(result, RequestType::BulkString { data: &[] });
     }
 
     #[test]
@@ -1652,7 +1581,7 @@ mod resp3_tests {
         assert_eq!(
             result,
             RequestType::BulkString {
-                data: vec![b'h', b'e', b'l', b'l', b'o'],
+                data: &[b'h', b'e', b'l', b'l', b'o'],
             }
         );
     }
@@ -1673,10 +1602,10 @@ mod resp3_tests {
             RequestType::Array {
                 children: vec![
                     RequestType::BulkString {
-                        data: vec![b'h', b'e', b'l', b'l', b'o'],
+                        data: &[b'h', b'e', b'l', b'l', b'o'],
                     },
                     RequestType::BulkString {
-                        data: vec![b'w', b'o', b'r', b'l', b'd'],
+                        data: &[b'w', b'o', b'r', b'l', b'd'],
                     }
                 ]
             }
@@ -1692,9 +1621,9 @@ mod resp3_tests {
             result,
             RequestType::Array {
                 children: vec![
-                    RequestType::Integer { data: vec![b'1'] },
-                    RequestType::Integer { data: vec![b'2'] },
-                    RequestType::Integer { data: vec![b'3'] }
+                    RequestType::Integer { data: &[b'1'] },
+                    RequestType::Integer { data: &[b'2'] },
+                    RequestType::Integer { data: &[b'3'] }
                 ]
             }
         );
@@ -1707,12 +1636,12 @@ mod resp3_tests {
             RequestType::Array {
                 children: vec![
                     RequestType::Integer {
-                        data: vec![b'-', b'1']
+                        data: &[b'-', b'1']
                     },
                     RequestType::Integer {
-                        data: vec![b'+', b'2']
+                        data: &[b'+', b'2']
                     },
-                    RequestType::Integer { data: vec![b'3'] }
+                    RequestType::Integer { data: &[b'3'] }
                 ]
             }
         );
@@ -1728,11 +1657,11 @@ mod resp3_tests {
             RequestType::Array {
                 children: vec![
                     RequestType::Integer {
-                        data: vec![b'-', b'1'],
+                        data: &[b'-', b'1'],
                     },
-                    RequestType::Integer { data: vec![b'2'] },
+                    RequestType::Integer { data: &[b'2'] },
                     RequestType::Integer {
-                        data: vec![b'3', b'0', b'0'],
+                        data: &[b'3', b'0', b'0'],
                     }
                 ]
             }
@@ -1747,12 +1676,12 @@ mod resp3_tests {
             result,
             RequestType::Array {
                 children: vec![
-                    RequestType::Integer { data: vec![b'1'] },
-                    RequestType::Integer { data: vec![b'2'] },
-                    RequestType::Integer { data: vec![b'3'] },
-                    RequestType::Integer { data: vec![b'4'] },
+                    RequestType::Integer { data: &[b'1'] },
+                    RequestType::Integer { data: &[b'2'] },
+                    RequestType::Integer { data: &[b'3'] },
+                    RequestType::Integer { data: &[b'4'] },
                     RequestType::BulkString {
-                        data: vec![b'h', b'e', b'l', b'l', b'o'],
+                        data: &[b'h', b'e', b'l', b'l', b'o'],
                     }
                 ]
             }
@@ -1767,9 +1696,9 @@ mod resp3_tests {
         // First nested array: [1, 2, 3]
         let nested1 = RequestType::Array {
             children: vec![
-                RequestType::Integer { data: vec![b'1'] },
-                RequestType::Integer { data: vec![b'2'] },
-                RequestType::Integer { data: vec![b'3'] },
+                RequestType::Integer { data: &[b'1'] },
+                RequestType::Integer { data: &[b'2'] },
+                RequestType::Integer { data: &[b'3'] },
             ],
         };
 
@@ -1777,10 +1706,10 @@ mod resp3_tests {
         let nested2 = RequestType::Array {
             children: vec![
                 RequestType::SimpleString {
-                    data: vec![b'H', b'e', b'l', b'l', b'o'],
+                    data: &[b'H', b'e', b'l', b'l', b'o'],
                 },
                 RequestType::SimpleError {
-                    data: vec![b'W', b'o', b'r', b'l', b'd'],
+                    data: &[b'W', b'o', b'r', b'l', b'd'],
                 },
             ],
         };
@@ -1801,16 +1730,16 @@ mod resp3_tests {
         // First nested array: [1, 2]
         let nested1 = RequestType::Array {
             children: vec![
-                RequestType::Integer { data: vec![b'1'] },
-                RequestType::Integer { data: vec![b'2'] },
+                RequestType::Integer { data: &[b'1'] },
+                RequestType::Integer { data: &[b'2'] },
             ],
         };
 
         // Second nested array: [3, 4]
         let nested2 = RequestType::Array {
             children: vec![
-                RequestType::Integer { data: vec![b'3'] },
-                RequestType::Integer { data: vec![b'4'] },
+                RequestType::Integer { data: &[b'3'] },
+                RequestType::Integer { data: &[b'4'] },
             ],
         };
 
@@ -1830,8 +1759,8 @@ mod resp3_tests {
         // First nested array: [1, 2]
         let nested1 = RequestType::Array {
             children: vec![
-                RequestType::Integer { data: vec![b'1'] },
-                RequestType::Integer { data: vec![b'2'] },
+                RequestType::Integer { data: &[b'1'] },
+                RequestType::Integer { data: &[b'2'] },
             ],
         };
 
@@ -1839,22 +1768,16 @@ mod resp3_tests {
         let nested3 = RequestType::Array {
             children: vec![
                 RequestType::BulkString {
-                    data: vec![b'w', b'o', b'r', b'l', b'd'],
+                    data: &[b'w', b'o', b'r', b'l', b'd'],
                 },
-                RequestType::Integer { data: vec![b'5'] },
+                RequestType::Integer { data: &[b'5'] },
             ],
         };
 
         assert_eq!(
             result,
             RequestType::Array {
-                children: vec![
-                    nested1,
-                    RequestType::BulkString {
-                        data: b"hello".to_vec()
-                    },
-                    nested3
-                ]
+                children: vec![nested1, RequestType::BulkString { data: b"hello" }, nested3]
             },
         );
     }
@@ -1882,7 +1805,7 @@ mod resp3_tests {
         // Innermost array: [42]
         let innermost = RequestType::Array {
             children: vec![RequestType::Integer {
-                data: vec![b'4', b'2'],
+                data: &[b'4', b'2'],
             }],
         };
 
@@ -1915,11 +1838,11 @@ mod resp3_tests {
             RequestType::Array {
                 children: vec![
                     RequestType::BulkString {
-                        data: vec![b'h', b'e', b'l', b'l', b'o'],
+                        data: &[b'h', b'e', b'l', b'l', b'o'],
                     },
                     RequestType::Null,
                     RequestType::BulkString {
-                        data: vec![b'w', b'o', b'r', b'l', b'd'],
+                        data: &[b'w', b'o', b'r', b'l', b'd'],
                     }
                 ]
             }

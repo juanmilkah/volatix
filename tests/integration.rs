@@ -141,11 +141,15 @@ mod integration {
         }
     }
 
-    fn send_request(mut stream: &TcpStream, req: &[u8]) -> io::Result<RequestType> {
+    fn send_request<'re>(
+        mut stream: &'re TcpStream,
+        req: &'re [u8],
+    ) -> io::Result<RequestType<'re>> {
         stream.write_all(req).unwrap();
 
         let mut buffer = [0u8; BUFFER_SIZE];
         let n = stream.read(&mut buffer)?;
+        let buffer = Box::leak(Box::new(buffer));
 
         parse_request(&buffer[..n]).map_err(|err| err.into())
     }
@@ -165,12 +169,8 @@ mod integration {
         assert!(n > 0);
         let resp = parse_request(&buffer[..n]).unwrap();
 
-        assert_eq!(
-            resp,
-            RequestType::BulkString {
-                data: b"HELLO".to_vec()
-            }
-        )
+        assert_eq!(resp, RequestType::BulkString { data: b"HELLO" });
+        drop(resp);
     }
 
     #[test]
@@ -181,23 +181,17 @@ mod integration {
         let set_req = array!("SET", "foo1", "bar");
 
         let resp = send_request(&stream, &set_req).unwrap();
-        let success_resp = RequestType::BulkString {
-            data: b"SUCCESS".to_vec(),
-        };
+        let success_resp = RequestType::BulkString { data: b"SUCCESS" };
         assert_eq!(resp, success_resp);
 
         let get_req = array!("GET", "foo1");
         let resp = send_request(&stream, &get_req).unwrap();
-        assert_eq!(
-            resp,
-            RequestType::BulkString {
-                data: b"bar".to_vec()
-            }
-        );
+        assert_eq!(resp, RequestType::BulkString { data: b"bar" });
 
         let delete_req = array!("DELETE", "foo1");
         let resp = send_request(&stream, &delete_req).unwrap();
-        assert_eq!(resp, success_resp)
+        assert_eq!(resp, success_resp);
+        drop(resp);
     }
 
     #[test]
@@ -210,9 +204,7 @@ mod integration {
         let deletelist_req = array!("DELETELIST", "food");
 
         let resp = send_request(&stream, &setlist_req).unwrap();
-        let success_resp = RequestType::BulkString {
-            data: b"SUCCESS".to_vec(),
-        };
+        let success_resp = RequestType::BulkString { data: b"SUCCESS" };
         assert_eq!(resp, success_resp);
 
         let resp = send_request(&stream, &getlist_req).unwrap();
@@ -220,26 +212,18 @@ mod integration {
             children: vec![
                 RequestType::Array {
                     children: vec![
-                        RequestType::BulkString {
-                            data: b"food".to_vec(),
-                        },
+                        RequestType::BulkString { data: b"food" },
                         RequestType::Array {
                             children: vec![
-                                RequestType::BulkString {
-                                    data: b"bar".to_vec(),
-                                },
-                                RequestType::BulkString {
-                                    data: b"baz".to_vec(),
-                                },
+                                RequestType::BulkString { data: b"bar" },
+                                RequestType::BulkString { data: b"baz" },
                             ],
                         },
                     ],
                 },
                 RequestType::Array {
                     children: vec![
-                        RequestType::BulkString {
-                            data: b"baron".to_vec(),
-                        },
+                        RequestType::BulkString { data: b"baron" },
                         RequestType::Null,
                     ],
                 },
@@ -250,6 +234,7 @@ mod integration {
 
         let resp = send_request(&stream, &deletelist_req).unwrap();
         assert_eq!(resp, success_resp);
+        drop(resp);
     }
 
     #[test]
@@ -261,28 +246,17 @@ mod integration {
         dbg!(&setmap_req);
 
         let resp = send_request(&stream, &setmap_req).unwrap();
-        let success_resp = RequestType::BulkString {
-            data: b"SUCCESS".to_vec(),
-        };
+        let success_resp = RequestType::BulkString { data: b"SUCCESS" };
         assert_eq!(resp, success_resp);
 
         let get_req = array!("GET", "mwak");
         let resp = send_request(&stream, &get_req).unwrap();
-        assert_eq!(
-            resp,
-            RequestType::BulkString {
-                data: b"peep".to_vec()
-            }
-        );
+        assert_eq!(resp, RequestType::BulkString { data: b"peep" });
 
         let get_req = array!("GET", "baz");
         let resp = send_request(&stream, &get_req).unwrap();
-        assert_eq!(
-            resp,
-            RequestType::BulkString {
-                data: b"choi".to_vec()
-            }
-        );
+        assert_eq!(resp, RequestType::BulkString { data: b"choi" });
+        drop(resp);
     }
 
     #[test]
@@ -292,9 +266,7 @@ mod integration {
 
         let set_comp = array!("CONFSET", "COMPRESSION", "enable");
         let resp = send_request(&stream, &set_comp).unwrap();
-        let success_resp = RequestType::BulkString {
-            data: b"SUCCESS".to_vec(),
-        };
+        let success_resp = RequestType::BulkString { data: b"SUCCESS" };
         assert_eq!(resp, success_resp);
 
         let set_threshold = array!("CONFSET", "COMPTHRESHOLD", "30");
@@ -312,12 +284,13 @@ mod integration {
         assert_eq!(
             resp,
             RequestType::BulkString {
-                data: b"bar".repeat(20).to_vec()
+                data: &b"bar".repeat(20)
             }
         );
 
         let delete_req = array!("DELETE", "foo2");
         let resp = send_request(&stream, &delete_req).unwrap();
-        assert_eq!(resp, success_resp)
+        assert_eq!(resp, success_resp);
+        drop(resp);
     }
 }
