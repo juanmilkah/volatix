@@ -801,7 +801,7 @@ fn parse_doubles<'re>(
         *byte_offset += 3;
         i += 3;
         let end = i;
-        if data[i + 3] == b'\r' && data[i + 4] == b'\n' {
+        if data[i] == b'\r' && data[i + 1] == b'\n' {
             *byte_offset += 2;
             i += 2;
             return Ok((
@@ -820,7 +820,7 @@ fn parse_doubles<'re>(
         *byte_offset += 3;
         i += 3;
         let end = i;
-        if data[i + 3] == b'\r' && data[i + 4] == b'\n' {
+        if data[i] == b'\r' && data[i + 1] == b'\n' {
             *byte_offset += 2;
             i += 2;
             return Ok((
@@ -850,9 +850,9 @@ fn parse_doubles<'re>(
 
     if dot.is_none() {
         if data[i] == b'\r' && data[i + 1] == b'\n' {
-            *byte_offset += 2;
-            i += 2;
             let end = i;
+            i += 2;
+            *byte_offset += 2;
             return Ok((
                 RequestType::Double {
                     data: &data[start..end],

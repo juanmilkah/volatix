@@ -406,7 +406,7 @@ pub struct LockedStorage {
     /// Atomic statistics for thread-safe performance tracking
     pub stats: StorageStats,
     /// Current number of entries in the store
-    pub entry_count: usize,
+    pub entry_count: AtomicUsize,
 }
 
 /// Serializable version of storage for disk persistence.
@@ -434,7 +434,7 @@ impl LockedStorage {
             options,
             stats: StorageStats::default(),
             is_dirty: AtomicBool::new(false),
-            entry_count: 0,
+            entry_count: AtomicUsize::new(0),
         }
     }
 
@@ -696,6 +696,7 @@ impl LockedStorage {
         self.store.write().insert(key, entry);
         self.stats.total_entries.fetch_add(1, Ordering::Relaxed);
         self.is_dirty.fetch_and(true, Ordering::Relaxed);
+        self.entry_count.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 
@@ -755,7 +756,7 @@ impl LockedStorage {
     /// Checks if the cache is at capacity.
     /// Used internally to decide when eviction is needed.
     pub fn is_full(&self) -> bool {
-        self.entry_count == self.options.max_capacity
+        self.entry_count.load(Ordering::Relaxed) >= self.options.max_capacity
     }
 
     /// Checks whether storage has any unsyched changes to disk
@@ -806,7 +807,7 @@ impl LockedStorage {
     /// [`Self::entry_count`] the storage is flushed.
     /// If count is zero, 10% of total entries is evicted.
     pub fn evict_entries(&mut self, count: usize) {
-        let s = self.entry_count;
+        let s = self.entry_count.load(Ordering::Relaxed);
         if count >= s {
             self.flush();
             return;
