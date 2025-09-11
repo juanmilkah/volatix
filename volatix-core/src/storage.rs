@@ -5,8 +5,8 @@ use std::{
     io::{self, BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::{Duration, SystemTime},
 };
@@ -165,7 +165,7 @@ pub struct StorageOptions {
     /// Default TTL for new entries
     pub ttl: Duration,
     /// Maximum number of entries allowed
-    pub max_capacity: u64,
+    pub max_capacity: usize,
     /// Strategy for removing entries when at capacity
     pub eviction_policy: EvictionPolicy,
     /// Whether to enable automatic compression
@@ -227,7 +227,7 @@ impl StorageOptions {
     /// ```
     pub fn new(
         ttl: Duration,
-        max_cap: u64,
+        max_cap: usize,
         evict_policy: &EvictionPolicy,
         compression: &Compression,
         compression_threshold: usize,
@@ -344,8 +344,8 @@ impl Display for EvictionPolicy {
 #[derive(Debug)]
 pub enum ConfigEntry {
     EvictPolicy(EvictionPolicy),
-    GlobalTtl(u64),
-    MaxCapacity(u64),
+    GlobalTtl(usize),
+    MaxCapacity(usize),
     Compression(Compression),
     CompressionThreshold(usize),
 }
@@ -405,6 +405,8 @@ pub struct LockedStorage {
     pub options: StorageOptions,
     /// Atomic statistics for thread-safe performance tracking
     pub stats: StorageStats,
+    /// Current number of entries in the store
+    pub entry_count: usize,
 }
 
 /// Serializable version of storage for disk persistence.
@@ -432,6 +434,7 @@ impl LockedStorage {
             options,
             stats: StorageStats::default(),
             is_dirty: AtomicBool::new(false),
+            entry_count: 0,
         }
     }
 
@@ -657,12 +660,6 @@ impl LockedStorage {
         value: StorageValue,
         ttl: Duration,
     ) -> Result<(), String> {
-        // Check if we need to make room for this entry
-        if self.is_full() {
-            // Evict 10% of the entries
-            self.evict_entries(0);
-        }
-
         let entry_size = value.size_in_bytes();
         let now = SystemTime::now();
 
@@ -670,7 +667,7 @@ impl LockedStorage {
         let (value, compressed) = {
             if self.options.compression
                 && let StorageValue::Text(text) = &value
-                && entry_size >= self.options.compression_threshold
+                && entry_size > self.options.compression_threshold
             {
                 let bytes = compress(text).map_err(|err| format!("Compression error: {err}"))?;
                 (StorageValue::Bytes(bytes), true)
@@ -691,6 +688,11 @@ impl LockedStorage {
         };
 
         // Insert the entry and update statistics
+        // Check if we need to make room for this entry
+        if self.is_full() {
+            // Evict 10% of the entries
+            self.evict_entries(0);
+        }
         self.store.write().insert(key, entry);
         self.stats.total_entries.fetch_add(1, Ordering::Relaxed);
         self.is_dirty.fetch_and(true, Ordering::Relaxed);
@@ -753,7 +755,7 @@ impl LockedStorage {
     /// Checks if the cache is at capacity.
     /// Used internally to decide when eviction is needed.
     pub fn is_full(&self) -> bool {
-        self.store.read().len() as u64 >= self.options.max_capacity
+        self.entry_count == self.options.max_capacity
     }
 
     /// Checks whether storage has any unsyched changes to disk
@@ -767,14 +769,8 @@ impl LockedStorage {
     }
 
     /// Checks the current maximum capacity of the storage
-    pub fn max_capacity(&self) -> u64 {
+    pub fn max_capacity(&self) -> usize {
         self.options.max_capacity
-    }
-
-    /// Check the total number of entries currently in the store.
-    /// Valid and invalid values inclusive
-    pub fn entry_count(&self) -> usize {
-        self.store.read().len()
     }
 
     /// Removes all expired entries from the cache.
@@ -810,7 +806,7 @@ impl LockedStorage {
     /// [`Self::entry_count`] the storage is flushed.
     /// If count is zero, 10% of total entries is evicted.
     pub fn evict_entries(&mut self, count: usize) {
-        let s = self.entry_count();
+        let s = self.entry_count;
         if count >= s {
             self.flush();
             return;
@@ -930,7 +926,7 @@ impl LockedStorage {
         match key.to_uppercase().as_str() {
             "EVICTPOLICY" => Some(ConfigEntry::EvictPolicy(self.options.eviction_policy)),
             "MAXCAP" => Some(ConfigEntry::MaxCapacity(self.options.max_capacity)),
-            "GLOBALTTL" => Some(ConfigEntry::GlobalTtl(self.options.ttl.as_secs())),
+            "GLOBALTTL" => Some(ConfigEntry::GlobalTtl(self.options.ttl.as_secs() as usize)),
             "COMPRESSION" => Some(ConfigEntry::Compression(self.options.compression.into())),
             "COMPRESSIONTHRESHOLD" => Some(ConfigEntry::CompressionThreshold(
                 self.options.compression_threshold,
@@ -947,7 +943,7 @@ impl LockedStorage {
     pub fn set_config_entry(&mut self, entry: &ConfigEntry) {
         match entry {
             ConfigEntry::EvictPolicy(p) => self.options.eviction_policy = *p,
-            ConfigEntry::GlobalTtl(t) => self.options.ttl = Duration::from_secs(*t),
+            ConfigEntry::GlobalTtl(t) => self.options.ttl = Duration::from_secs(*t as u64),
             ConfigEntry::MaxCapacity(c) => self.options.max_capacity = *c,
             ConfigEntry::Compression(b) => {
                 self.options.compression = <Compression as Into<bool>>::into(*b)

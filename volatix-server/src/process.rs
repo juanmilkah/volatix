@@ -169,7 +169,7 @@ fn config_entry(key: &str, value: &StorageValue) -> Result<ConfigEntry, String> 
                 if *n < 0 {
                     return Err("MAXCAP value less than 0".to_string());
                 }
-                Ok(ConfigEntry::MaxCapacity(*n as u64))
+                Ok(ConfigEntry::MaxCapacity(*n as usize))
             }
             _ => Err("Invalid MAXCAP value".to_string()),
         },
@@ -179,7 +179,7 @@ fn config_entry(key: &str, value: &StorageValue) -> Result<ConfigEntry, String> 
                 if *n < 0 {
                     return Err("GLOBALTTL value less than 0".to_string());
                 }
-                Ok(ConfigEntry::GlobalTtl(*n as u64))
+                Ok(ConfigEntry::GlobalTtl(*n as usize))
             }
             _ => Err("Invalid GLOBALTTL value".to_string()),
         },
