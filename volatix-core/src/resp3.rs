@@ -1193,8 +1193,8 @@ fn parse_maps<'re>(
         i += consumed;
 
         let key = match key {
-            RequestType::BulkString { data } => String::from_utf8_lossy(&data).to_string(),
-            RequestType::SimpleString { data } => String::from_utf8_lossy(&data).to_string(),
+            RequestType::BulkString { data } => String::from_utf8_lossy(data).to_string(),
+            RequestType::SimpleString { data } => String::from_utf8_lossy(data).to_string(),
             _ => return parser_error!("Invalid key type", *byte_offset),
         };
 
