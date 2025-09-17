@@ -220,27 +220,23 @@ impl StorageOptions {
     /// let options = StorageOptions::new(
     ///     Duration::from_secs(3600),  // 1 hour TTL
     ///     10000,                      // 10k entries max
-    ///     &EvictionPolicy::LRU,       // Use LRU eviction
-    ///     &Compression::Enabled,      // Enable compression
+    ///     EvictionPolicy::LRU,       // Use LRU eviction
+    ///     Compression::Enabled,      // Enable compression
     ///     1024                        // Compress values > 1KB
     /// );
     /// ```
     pub fn new(
         ttl: Duration,
         max_cap: usize,
-        evict_policy: &EvictionPolicy,
-        compression: &Compression,
+        evict_policy: EvictionPolicy,
+        compression: Compression,
         compression_threshold: usize,
     ) -> Self {
-        let compression = match compression {
-            Compression::Enabled => true,
-            Compression::Disabled => false,
-        };
         Self {
             ttl,
             max_capacity: max_cap,
-            eviction_policy: *evict_policy,
-            compression,
+            eviction_policy: evict_policy,
+            compression: <Compression as Into<bool>>::into(compression),
             compression_threshold,
         }
     }
@@ -1089,8 +1085,8 @@ mod storage_tests {
         let options = StorageOptions::new(
             ttl,
             max_capacity,
-            &EvictionPolicy::Oldest,
-            &Compression::Disabled,
+            EvictionPolicy::Oldest,
+            Compression::Disabled,
             0,
         );
         let storage = LockedStorage::new(options);
@@ -1141,8 +1137,8 @@ mod storage_tests {
         let options = StorageOptions::new(
             Duration::from_secs(3600),
             3,
-            &EvictionPolicy::Oldest,
-            &Compression::Disabled,
+            EvictionPolicy::Oldest,
+            Compression::Disabled,
             0,
         );
         let mut storage = LockedStorage::new(options);
@@ -1175,8 +1171,8 @@ mod storage_tests {
         let options = StorageOptions::new(
             Duration::from_millis(100),
             10,
-            &EvictionPolicy::Oldest,
-            &Compression::Disabled,
+            EvictionPolicy::Oldest,
+            Compression::Disabled,
             0,
         );
         let mut storage = LockedStorage::new(options);
@@ -1205,8 +1201,8 @@ mod storage_tests {
         let options = StorageOptions::new(
             Duration::from_millis(100),
             5,
-            &EvictionPolicy::Oldest,
-            &Compression::Disabled,
+            EvictionPolicy::Oldest,
+            Compression::Disabled,
             0,
         );
         let mut storage = LockedStorage::new(options);
@@ -1233,8 +1229,8 @@ mod storage_tests {
         let options = StorageOptions::new(
             Duration::from_secs(3600),
             3,
-            &EvictionPolicy::Oldest,
-            &Compression::Disabled,
+            EvictionPolicy::Oldest,
+            Compression::Disabled,
             0,
         );
         let mut storage = LockedStorage::new(options);
@@ -1391,8 +1387,8 @@ mod storage_tests {
         let options = StorageOptions::new(
             Duration::from_secs(10),
             2,
-            &EvictionPolicy::Oldest,
-            &Compression::Disabled,
+            EvictionPolicy::Oldest,
+            Compression::Disabled,
             0,
         );
         let mut storage = LockedStorage::new(options);
@@ -1415,8 +1411,8 @@ mod storage_tests {
         let options = StorageOptions::new(
             Duration::from_secs(10),
             2,
-            &EvictionPolicy::Oldest,
-            &Compression::Disabled,
+            EvictionPolicy::Oldest,
+            Compression::Disabled,
             0,
         );
         let mut storage = LockedStorage::new(options);
@@ -1440,8 +1436,8 @@ mod storage_tests {
         let options = StorageOptions::new(
             Duration::from_secs(10),
             2,
-            &EvictionPolicy::Oldest,
-            &Compression::Disabled,
+            EvictionPolicy::Oldest,
+            Compression::Disabled,
             0,
         );
         let mut storage = LockedStorage::new(options);
