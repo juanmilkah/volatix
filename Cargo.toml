@@ -59,6 +59,6 @@ strip = "debuginfo"
 
 [profile.dev]
 debug = true
-panic = "unwind"
-opt-level = 3
 lto = true
+opt-level = 3
+panic = "unwind"
