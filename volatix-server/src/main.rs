@@ -12,7 +12,6 @@ use clap::Parser;
 use libvolatix::{
     LockedStorage, Message, StorageOptions, handle_messages, parse_request, volatix_ascii_art,
 };
-use parking_lot::RwLock;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     sync::broadcast::Sender,
@@ -128,10 +127,10 @@ async fn main() -> anyhow::Result<()> {
     let options = StorageOptions::default();
     let storage = Arc::new(parking_lot::RwLock::new(LockedStorage::new(options)));
     let persistent_path = get_persistent_path(".volatix.bin")?;
-
-    let mut guard = storage.write();
-    guard.load_from_disk(&persistent_path)?;
-    drop(guard);
+    {
+        // avoid deadlock
+        storage.write().load_from_disk(&persistent_path)?;
+    }
 
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel(1);
     let shutdown_sig = shutdown_tx.clone();
@@ -142,7 +141,7 @@ async fn main() -> anyhow::Result<()> {
         Ok::<(), std::io::Error>(())
     });
 
-    let snapshots_storage: Arc<RwLock<LockedStorage>> = Arc::clone(&storage);
+    let snapshots_storage = Arc::clone(&storage);
     let snapshots_persistent_path = persistent_path.clone();
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(
