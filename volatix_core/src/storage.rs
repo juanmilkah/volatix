@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// # Examples
 /// ```rust
-/// use libvolatix::StorageValue;
+/// use volatix_core::StorageValue;
 ///
 /// let int_val = StorageValue::Int(42);
 /// let text_val = StorageValue::Text("hello world".to_string());
@@ -215,7 +215,7 @@ impl StorageOptions {
     /// # Example
     /// ```rust
     /// use std::time::Duration;
-    /// use libvolatix::{Compression, EvictionPolicy, StorageOptions};
+    /// use volatix_core::{Compression, EvictionPolicy, StorageOptions};
     ///
     /// let options = StorageOptions::new(
     ///     Duration::from_secs(3600),  // 1 hour TTL
@@ -384,7 +384,7 @@ fn compress(data: &str) -> Result<Vec<u8>, String> {
 /// # Example
 /// ```rust
 /// use std::time::Duration;
-/// use libvolatix::{LockedStorage, StorageValue};
+/// use volatix_core::{LockedStorage, StorageValue};
 ///
 /// let mut storage = LockedStorage::default();
 /// storage.insert_entry("key".to_string(), StorageValue::Text("value".to_string())).unwrap();
@@ -419,7 +419,7 @@ impl LockedStorage {
     ///
     /// # Example
     /// ```rust
-    /// use libvolatix::{LockedStorage, StorageOptions};
+    /// use volatix_core::{LockedStorage, StorageOptions};
     ///
     /// let options = StorageOptions::default();
     /// let storage = LockedStorage::new(options);
@@ -454,7 +454,7 @@ impl LockedStorage {
     ///
     /// # Example
     /// ```rust
-    /// use libvolatix::{LockedStorage, StorageOptions};
+    /// use volatix_core::{LockedStorage, StorageOptions};
     ///
     /// let storage = LockedStorage::new(StorageOptions::default());
     ///
@@ -519,7 +519,7 @@ impl LockedStorage {
     ///
     /// # Example
     /// ```rust
-    /// use libvolatix::{LockedStorage, StorageOptions};
+    /// use volatix_core::{LockedStorage, StorageOptions};
     ///
     /// let storage = LockedStorage::new(StorageOptions::default());
     ///
@@ -640,7 +640,7 @@ impl LockedStorage {
     /// # Example
     /// ```rust
     /// use std::time::Duration;
-    /// use libvolatix::{LockedStorage, StorageValue, StorageOptions};
+    /// use volatix_core::{LockedStorage, StorageValue, StorageOptions};
     ///
     /// let mut storage = LockedStorage::new(StorageOptions::default());
     ///
@@ -708,7 +708,7 @@ impl LockedStorage {
     ///
     /// # Example
     /// ```rust
-    /// use libvolatix::{LockedStorage, StorageOptions};
+    /// use volatix_core::{LockedStorage, StorageOptions};
     ///
     /// let mut storage = LockedStorage::new(StorageOptions::default());
     ///
@@ -871,7 +871,7 @@ impl LockedStorage {
     ///
     /// # Example
     /// ```rust
-    /// use libvolatix::{StorageOptions, LockedStorage};
+    /// use volatix_core::{StorageOptions, LockedStorage};
     ///
     /// let mut storage = LockedStorage::new(StorageOptions::default());
     /// storage.rename_entry("old_name", "new_name");
@@ -974,7 +974,7 @@ impl LockedStorage {
     ///
     /// # Example
     /// ```rust
-    /// use libvolatix::{StorageOptions, LockedStorage};
+    /// use volatix_core::{StorageOptions, LockedStorage};
     /// use std::path::Path;
     ///
     /// let mut storage = LockedStorage::new(StorageOptions::default());
@@ -1027,7 +1027,7 @@ impl LockedStorage {
     ///
     /// # Example
     /// ```rust
-    /// use libvolatix::{LockedStorage, StorageOptions};
+    /// use volatix_core::{LockedStorage, StorageOptions};
     /// use std::path::Path;
     ///
     /// let storage = LockedStorage::new(StorageOptions::default());

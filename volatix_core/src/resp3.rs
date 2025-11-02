@@ -9,7 +9,7 @@ use crate::{StorageValue, parser_error};
 ///
 /// # Examples
 /// ```rust
-/// use libvolatix::array;
+/// use volatix_core::array;
 ///
 /// let names = vec!["Mike".to_string()];
 /// let arr = array!(names);
@@ -48,7 +48,7 @@ macro_rules! array {
 ///
 /// # Examples
 /// ```rust
-/// use libvolatix::bulkstring;
+/// use volatix_core::bulkstring;
 ///
 /// let name = "Mike";
 /// let bulk_string = bulkstring!(Some(name));
@@ -81,7 +81,7 @@ macro_rules! bulkstring {
 ///
 /// # Examples
 /// ```rust
-/// use libvolatix::null;
+/// use volatix_core::null;
 ///
 /// let n = null!();
 /// assert_eq!(n, b"$-1\r\n".to_vec());
@@ -98,7 +98,7 @@ macro_rules! null {
 ///
 /// # Examples
 /// ```rust
-/// use libvolatix::bulkerror;
+/// use volatix_core::bulkerror;
 ///
 /// let err = "error";
 /// let bulk_error = bulkerror!(err);
@@ -124,7 +124,7 @@ macro_rules! bulkerror {
 ///
 /// # Examples
 /// ```rust
-/// use libvolatix::boolean;
+/// use volatix_core::boolean;
 ///
 /// let is_valid = true;
 /// let t = boolean!(is_valid);
@@ -150,7 +150,7 @@ macro_rules! boolean {
 ///
 /// # Examples
 /// ```rust
-/// use libvolatix::integer;
+/// use volatix_core::integer;
 ///
 /// let n = 10;
 /// let n_bytes = integer!(n);
