@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use libvolatix::{Error, parser_error};
+use volatix_core::{Error, parser_error};
 
 /// Enum representing all supported Volatix database commands
 /// Each variant contains the necessary parameters for the command

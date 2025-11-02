@@ -1,13 +1,11 @@
 [package]
 edition = "2024"
-name = "volatix-core"
+name = "volatix_server"
 version = "0.1.0"
 
 [dependencies]
 anyhow = { workspace = true }
-bincode2 = { workspace = true }
 clap = { workspace = true }
-flate2 = { workspace = true }
+ctrlc.workspace = true
 parking_lot = { workspace = true }
-serde = { workspace = true }
-tokio = { workspace = true }
+volatix_core = { workspace = true }

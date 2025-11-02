@@ -1,7 +1,7 @@
 # Volatix
 
-![Performance](performance.png)
-![Memory Info](flamegraph.svg)
+- ![Performance Info](images/screenshots-2025-11-02-15:41:26.png)
+- ![Performance Info](images/screenshots-2025-11-02-15:42:35.png)
 
 An In memory database :)
 

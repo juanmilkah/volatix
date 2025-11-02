@@ -1,8 +1,8 @@
 [package]
 edition = "2024"
-name = "volatix-cli"
+name = "volatix_cli"
 version = "0.1.0"
 
 [dependencies]
 crossterm = { workspace = true }
-libvolatix = { workspace = true }
+volatix_core = { workspace = true }

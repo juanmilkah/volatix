@@ -3,11 +3,11 @@ use std::{
     fs::File,
     io::{self, BufWriter, Write},
     path::Path,
+    sync::mpsc::Receiver,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::Context;
-use tokio::sync::broadcast::Receiver;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Error {
@@ -103,10 +103,7 @@ pub enum Message {
 
 /// Writes log messages to disk
 /// The function exits if the handler receives a `Message::Break`.
-pub async fn handle_messages(
-    log_file: &Path,
-    mut handler: Receiver<Message>,
-) -> anyhow::Result<()> {
+pub fn handle_messages(log_file: &Path, handler: Receiver<Message>) -> anyhow::Result<()> {
     let log_file = File::options()
         .create(true)
         .append(true)
@@ -114,7 +111,7 @@ pub async fn handle_messages(
         .context("Open log file for writing")?;
     let mut f = BufWriter::new(log_file);
 
-    while let Ok(msg) = handler.recv().await {
+    while let Ok(msg) = handler.recv() {
         let now = SystemTime::now();
         match msg {
             Message::Info(m) => {

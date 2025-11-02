@@ -8,23 +8,7 @@ readme = "README.md"
 version = "0.1.0"
 
 [workspace]
-members = ["volatix-server", "volatix-cli", "volatix-bench", "volatix-core"]
-
-[[bin]]
-name = "volatix-server"
-path = "volatix-server/src/main.rs"
-
-[[bin]]
-name = "volatix-cli"
-path = "volatix-cli/src/main.rs"
-
-[lib]
-name = "libvolatix"
-path = "volatix-core/src/lib.rs"
-
-[[bin]]
-name = "volatix-bench"
-path = "volatix-bench/src/main.rs"
+members = ["volatix_bench", "volatix_cli", "volatix_core", "volatix_server"]
 
 [workspace.dependencies]
 anyhow = "1.0.98"
@@ -33,32 +17,46 @@ clap = { version = "4.5.43", features = ["derive"] }
 crossterm = "0.29.0"
 ctrlc = "3.4.7"
 flate2 = "1.1.2"
-libvolatix = { path = "volatix-server" }
+volatix_core = { path = "volatix_core" }
 parking_lot = "0.12.4"
 rand = "0.9.2"
 serde = { version = "1.0.219", features = ["derive"] }
-tokio = { version = "1.47.1", features = ["full"] }
+
+[lib]
+name = "volatix_core"
+path = "volatix_core/src/lib.rs"
+
+[[bin]]
+name = "volatix_server"
+path = "volatix_server/src/main.rs"
+
+[[bin]]
+name = "volatix_cli"
+path = "volatix_cli/src/main.rs"
+
+[[bin]]
+name = "volatix_bench"
+path = "volatix_bench/src/main.rs"
 
 [dependencies]
 anyhow = { workspace = true }
 bincode2 = { workspace = true }
 clap = { workspace = true }
 crossterm = { workspace = true }
-ctrlc = { workspace = true }
+ctrlc.workspace = true
 flate2 = { workspace = true }
 parking_lot = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
-tokio = { workspace = true }
-
-[profile.release]
-incremental = true
-lto = true
-opt-level = 3
-strip = "debuginfo"
 
 [profile.dev]
+opt-level = 3
 debug = true
 lto = true
-opt-level = 3
 panic = "unwind"
+
+[profile.release]
+opt-level = 3
+strip = "debuginfo"
+lto = true
+incremental = true

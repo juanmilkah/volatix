@@ -1,20 +1,23 @@
 use std::{
     env,
-    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
+    io::{Read, Write},
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{Sender, channel},
+    },
+    thread::JoinHandle,
     time::Duration,
 };
 
 mod process;
 
 use clap::Parser;
-use libvolatix::{
+use parking_lot::RwLock;
+use volatix_core::{
     LockedStorage, Message, StorageOptions, handle_messages, parse_request, volatix_ascii_art,
-};
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    sync::broadcast::Sender,
 };
 
 use crate::process::process_request;
@@ -24,24 +27,22 @@ const DEFAULT_PORT: u16 = 7878;
 // FLush snapshots to disk in this interval
 const SNAPSHOTS_INTERVAL_TIME: u64 = 60 * 5; // In seconds
 
-async fn handle_client(
-    mut stream: tokio::net::TcpStream,
+fn handle_client(
+    mut stream: TcpStream,
     storage: Arc<parking_lot::RwLock<LockedStorage>>,
     message_tx: Arc<Sender<Message>>,
 ) {
-    // pre-allocating a higher value may lead to
-    // the tokio worker overflowing it's stack
     let mut buffer = [0; 1024 * 14];
 
     loop {
-        match stream.read(&mut buffer).await {
+        match stream.read(&mut buffer) {
             Ok(0) => break,
             Ok(n) => match parse_request(&buffer[..n]) {
                 Ok(req) => {
                     let storage = Arc::clone(&storage);
                     let response = process_request(&req, storage, Arc::clone(&message_tx));
 
-                    if let Err(e) = stream.write_all(&response).await {
+                    if let Err(e) = stream.write_all(&response) {
                         let _ =
                             message_tx.send(Message::Error(format!("Writing to tcp Stream: {e}")));
                     }
@@ -50,7 +51,7 @@ async fn handle_client(
                     let err = format!("Invalid request: {err}");
                     let _ = message_tx.send(Message::Error(format!("Invalid request: {err}")));
 
-                    if let Err(e) = stream.write_all(err.as_bytes()).await {
+                    if let Err(e) = stream.write_all(err.as_bytes()) {
                         let _ =
                             message_tx.send(Message::Error(format!("Writing to tcp Stream: {e}")));
                     }
@@ -104,72 +105,115 @@ fn get_log_file() -> anyhow::Result<PathBuf> {
     Ok(home.to_path_buf().join(".volatix.logs"))
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+pub struct Worker {
+    pub id: String,
+    pub job: JoinHandle<()>,
+}
+
+fn main() -> anyhow::Result<()> {
     println!("{art}", art = volatix_ascii_art());
 
     let args = Cli::parse();
     let port: u16 = args.port.unwrap_or(DEFAULT_PORT);
 
     let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port));
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let listener = TcpListener::bind(addr)?;
+    listener.set_nonblocking(true)?;
     println!("Server listening on {addr}");
 
     // set up log messages handling
-    let (message_tx, message_rx) = tokio::sync::broadcast::channel(10);
+    let (message_tx, message_rx) = channel();
     let message_tx = Arc::new(message_tx);
     let log_file = get_log_file()?;
-    tokio::spawn(async move {
-        let _ = handle_messages(&log_file, message_rx).await;
+
+    let mut workers: Vec<Worker> = Vec::new();
+    workers.push(Worker {
+        id: "logs_handler".into(),
+        job: std::thread::spawn(move || {
+            let _ = handle_messages(&log_file, message_rx);
+        }),
     });
 
     // Intialise storage data
     let options = StorageOptions::default();
-    let storage = Arc::new(parking_lot::RwLock::new(LockedStorage::new(options)));
+    let storage: Arc<RwLock<LockedStorage>> =
+        Arc::new(parking_lot::RwLock::new(LockedStorage::new(options)));
     let persistent_path = get_persistent_path(".volatix.bin")?;
     {
         // avoid deadlock
         storage.write().load_from_disk(&persistent_path)?;
     }
 
-    let (shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel(1);
-    let shutdown_sig = shutdown_tx.clone();
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let shutdown_signal: Arc<AtomicBool> = Arc::clone(&shutdown);
 
-    tokio::spawn(async move {
-        tokio::signal::ctrl_c().await?;
-        let _ = shutdown_sig.send(());
-        Ok::<(), std::io::Error>(())
-    });
+    ctrlc::set_handler(move || {
+        shutdown_signal.store(true, Ordering::Relaxed);
+        println!("Received SIGTERM signal! Shutting down ...");
+    })?;
 
-    let snapshots_storage = Arc::clone(&storage);
+    let snapshots_storage: Arc<RwLock<LockedStorage>> = Arc::clone(&storage);
     let snapshots_persistent_path = persistent_path.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(
-            args.snapshots_interval.unwrap_or(SNAPSHOTS_INTERVAL_TIME),
-        ))
-        .await;
-        if snapshots_storage.read().should_flush() {
-            let _ = snapshots_storage
-                .read()
-                .save_to_disk(&snapshots_persistent_path);
-            snapshots_storage.write().toggle_dirty_flag();
-        }
+    let snapshots_shutdown = Arc::clone(&shutdown);
+    workers.push(Worker {
+        id: "snapshots_handler".into(),
+        job: std::thread::spawn(move || {
+            let interval = args.snapshots_interval.unwrap_or(SNAPSHOTS_INTERVAL_TIME);
+            loop {
+                for _ in 0..(interval * 10) / 100 {
+                    if snapshots_shutdown.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+
+                if snapshots_storage.read().should_flush() {
+                    let _ = snapshots_storage
+                        .read()
+                        .save_to_disk(&snapshots_persistent_path);
+                    snapshots_storage.write().toggle_dirty_flag();
+                }
+            }
+        }),
     });
 
-    loop {
-        tokio::select! {
-            _ = shutdown_rx.recv() =>{
-                println!("Received Shutdown Signal!");
-                break;
-            },
-            Ok((socket, _)) = listener.accept() =>{
-                let storage = Arc::clone(&storage);
-                let message_tx = Arc::clone(&message_tx);
-                tokio::spawn(async move{
-                    handle_client(socket, storage, message_tx).await;
-                });
+    let listener_shutdown = Arc::clone(&shutdown);
+    let listener_storage = Arc::clone(&storage);
+    let listener_message_tx = Arc::clone(&message_tx);
+    workers.push(Worker {
+        id: "client_handler".into(),
+        job: std::thread::spawn(move || {
+            loop {
+                if listener_shutdown.load(Ordering::Relaxed) {
+                    break;
+                }
+                match listener.accept() {
+                    Ok((client, _)) => {
+                        let client_storage = Arc::clone(&listener_storage);
+                        let message_tx = Arc::clone(&listener_message_tx);
+                        handle_client(client, client_storage, message_tx);
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => {
+                        continue;
+                    }
+                }
             }
-        }
+        }),
+    });
+
+    while !shutdown.load(Ordering::Relaxed) {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    // Kill the logs message handler
+    let _res = message_tx.send(Message::Break);
+
+    for worker in workers {
+        println!("Cleaning up {}", worker.id);
+        let _ = worker.job.join();
     }
 
     if storage.read().should_flush() {

@@ -6,12 +6,12 @@ mod usage;
 use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream};
 
-pub use ::libvolatix::volatix_ascii_art;
 use crossterm::{ExecutableCommand, QueueableCommand, cursor, event, terminal};
 use deserialize::{Response, deserialize_response};
 use parse::{Command, parse_line};
 use serialize::serialize_request;
 use usage::help;
+use volatix_core::volatix_ascii_art;
 
 const HISTORY_CAPACITY: usize = 100;
 

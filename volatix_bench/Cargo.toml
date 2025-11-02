@@ -1,9 +1,9 @@
 [package]
 edition = "2024"
-name = "libvolatix"
+name = "volatix_bench"
 version = "0.1.0"
 
 [dependencies]
 clap = { workspace = true }
 parking_lot = { workspace = true }
-tokio = { workspace = true }
+rand = { workspace = true }

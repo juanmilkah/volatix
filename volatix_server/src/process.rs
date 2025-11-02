@@ -1,8 +1,10 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{Arc, mpsc::Sender},
+    time::Duration,
+};
 
-use tokio::sync::broadcast::Sender;
-
-use libvolatix::{
+use volatix_core::{
     Compression, ConfigEntry, EvictionPolicy, LockedStorage, Message, RequestType, StorageValue,
     array, batch_getlist_entries, boolean, bulkerror, bulkstring, integer, null,
     storagevalue_to_string,

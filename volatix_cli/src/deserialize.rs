@@ -3,9 +3,8 @@
 //! Converts raw byte responses from the server (RESP/RESP3 format)
 //! into high-level `Response` enums for easier handling in application code.
 
-use ::libvolatix::{RequestType, parse_request};
-use libvolatix::Inner;
 use std::fmt::Display;
+use volatix_core::{Inner, RequestType, parse_request};
 
 /// Represents a parsed server response in a structured format.
 #[derive(Debug)]
