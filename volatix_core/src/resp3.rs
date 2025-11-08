@@ -297,6 +297,21 @@ macro_rules! batch_getlist_entries {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+pub enum DataEncoding {
+    Bin,
+    Txt,
+    Custom(Vec<u8>),
+}
+
+pub fn data_encoding_from_bytes(bytes: &[u8]) -> DataEncoding {
+    match String::from_utf8_lossy(bytes).to_string().as_str() {
+        "txt" => DataEncoding::Txt,
+        "bin" => DataEncoding::Bin,
+        _ => DataEncoding::Custom(bytes.to_vec()),
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub enum RequestType<'re> {
     SimpleString {
         data: &'re [u8],
@@ -324,7 +339,7 @@ pub enum RequestType<'re> {
         data: &'re [u8],
     },
     VerbatimString {
-        encoding: &'re [u8],
+        encoding: DataEncoding,
         data: &'re [u8],
     },
     Array {
@@ -1028,8 +1043,8 @@ fn parse_bulk_errors<'re>(
 /// One or more decimal digits (0..9) as the string's length, in bytes,
 /// as an unsigned, base-10 value.
 /// The CRLF terminator.
-/// Exactly three (3) bytes representing the data's encoding.
-// FIX: Get the different types of data encodings!
+/// Exactly three (3) bytes representing the data's encoding as defined in
+/// `DataEncoding`.
 //
 /// The colon (:) character separates the encoding and data.
 /// The data.
@@ -1094,7 +1109,7 @@ fn parse_verbatim_strings<'re>(
         return parser_error!("Missing encoding", *byte_offset);
     }
 
-    let encoding = &data[i..i + 3];
+    let encoding = data_encoding_from_bytes(&data[i..i + 3]);
     i += 3;
     *byte_offset += 3;
 
@@ -1338,7 +1353,10 @@ pub fn parse_request<'re>(data: &'re [u8]) -> Result<RequestType<'re>, crate::Er
 mod resp3_tests {
     use std::collections::HashMap;
 
-    use crate::resp3::{RequestType, parse_request};
+    use crate::{
+        DataEncoding,
+        resp3::{RequestType, parse_request},
+    };
 
     use super::{
         parse_big_numbers, parse_booleans, parse_bulk_errors, parse_doubles, parse_maps,
@@ -1478,7 +1496,7 @@ mod resp3_tests {
         assert_eq!(
             data,
             RequestType::VerbatimString {
-                encoding: b"txt",
+                encoding: DataEncoding::Txt,
                 data: expected
             }
         );

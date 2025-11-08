@@ -128,12 +128,24 @@ pub fn parse_arg(chars: &[char], pointer: &mut usize, arg_name: &str) -> Result<
 
     let mut arg_chars = Vec::new();
 
-    // FIX: Handle escaped quote characters
     if let Some(delim) = delimiter {
         // Handle quoted string - read until matching quote
-        while *pointer < l && chars[*pointer] != delim {
-            arg_chars.push(chars[*pointer]);
+        let until_delim = |pointer: &mut usize, mut arg_chars: Vec<char>| -> Vec<char> {
+            while *pointer < l && chars[*pointer] != delim {
+                arg_chars.push(chars[*pointer]);
+                *pointer += 1;
+            }
+            return arg_chars;
+        };
+
+        arg_chars = until_delim(pointer, arg_chars);
+
+        // Handle escaped quotes
+        if chars[*pointer - 1] == '\\' {
+            let _ = arg_chars.pop().unwrap_or_default();
+            arg_chars.push(delim);
             *pointer += 1;
+            arg_chars = until_delim(pointer, arg_chars);
         }
 
         // Check for closing quote

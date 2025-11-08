@@ -68,6 +68,11 @@ impl History {
     /// - If history is full, overwrites the oldest command
     /// - Resets current navigation index
     fn push(&mut self, command: String) {
+        let command = command.trim().trim_end_matches('\n').to_string();
+        if command.is_empty() {
+            return;
+        }
+
         // Skip if the command is the same as the last added command
         if self.len > 0 {
             let last_index = (self.start + self.len - 1) % HISTORY_CAPACITY;
@@ -171,9 +176,7 @@ fn handshake(mut stream: &TcpStream) -> Result<(), String> {
         Err(e) => return Err(e.to_string()),
     }
 
-    // FIX: How limited should this be?
-    // Read server response (limited buffer since HELLO response is small)
-    let mut buffer = [0u8; 14 * 1024];
+    let mut buffer = [0u8; 64 * 4];
     match stream.read(&mut buffer) {
         Ok(_) => (),
         Err(e) => return Err(e.to_string()),
@@ -284,6 +287,7 @@ fn read_line(prompt: &str, history: &mut History) -> Result<String, String> {
                     stdout
                         .execute(cursor::MoveToColumn(0))
                         .map_err(|err| err.to_string())?;
+                    history.push(line.to_string());
                     return Ok(line);
                 }
                 event::KeyCode::Left => {
@@ -311,7 +315,6 @@ fn read_line(prompt: &str, history: &mut History) -> Result<String, String> {
                             .queue(terminal::Clear(terminal::ClearType::UntilNewLine))
                             .map_err(|err| err.to_string())?;
 
-                        // FIX: use references rather than clones
                         line = cmd.clone();
                         cursor_pos = line.len();
 
@@ -331,7 +334,6 @@ fn read_line(prompt: &str, history: &mut History) -> Result<String, String> {
                         .queue(terminal::Clear(terminal::ClearType::UntilNewLine))
                         .map_err(|err| err.to_string())?;
 
-                    // FIX: use references rather than clones
                     line = cmd.clone();
                     cursor_pos = line.len();
 
@@ -457,8 +459,6 @@ fn main() -> Result<(), String> {
         if line == "exit" || line == "quit" {
             break;
         }
-
-        hist.push(line.to_string());
 
         // Parse user input into a Command object
         let command = parse_line(line);

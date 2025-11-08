@@ -107,7 +107,7 @@ fn get_log_file() -> anyhow::Result<PathBuf> {
 
 pub struct Worker {
     pub id: String,
-    pub job: JoinHandle<()>,
+    pub handle: JoinHandle<()>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -129,7 +129,7 @@ fn main() -> anyhow::Result<()> {
     let mut workers: Vec<Worker> = Vec::new();
     workers.push(Worker {
         id: "logs_handler".into(),
-        job: std::thread::spawn(move || {
+        handle: std::thread::spawn(move || {
             let _ = handle_messages(&log_file, message_rx);
         }),
     });
@@ -157,21 +157,24 @@ fn main() -> anyhow::Result<()> {
     let snapshots_shutdown = Arc::clone(&shutdown);
     workers.push(Worker {
         id: "snapshots_handler".into(),
-        job: std::thread::spawn(move || {
+        handle: std::thread::spawn(move || {
             let interval = args.snapshots_interval.unwrap_or(SNAPSHOTS_INTERVAL_TIME);
             loop {
-                for _ in 0..(interval * 10) / 100 {
+                for _ in 0..(interval) / 10 {
                     if snapshots_shutdown.load(Ordering::Relaxed) {
                         return;
                     }
-                    std::thread::sleep(Duration::from_millis(100));
+                    std::thread::sleep(Duration::from_secs(10));
                 }
 
                 if snapshots_storage.read().should_flush() {
-                    let _ = snapshots_storage
+                    if snapshots_storage
                         .read()
-                        .save_to_disk(&snapshots_persistent_path);
-                    snapshots_storage.write().toggle_dirty_flag();
+                        .save_to_disk(&snapshots_persistent_path)
+                        .is_ok()
+                    {
+                        snapshots_storage.write().toggle_dirty_flag();
+                    }
                 }
             }
         }),
@@ -182,7 +185,7 @@ fn main() -> anyhow::Result<()> {
     let listener_message_tx = Arc::clone(&message_tx);
     workers.push(Worker {
         id: "client_handler".into(),
-        job: std::thread::spawn(move || {
+        handle: std::thread::spawn(move || {
             loop {
                 if listener_shutdown.load(Ordering::Relaxed) {
                     break;
@@ -213,15 +216,13 @@ fn main() -> anyhow::Result<()> {
 
     for worker in workers {
         println!("Cleaning up {}", worker.id);
-        let _ = worker.job.join();
+        let _ = worker.handle.join();
     }
 
     if storage.read().should_flush() {
         println!("Saving data to disk...");
         storage.read().save_to_disk(&persistent_path)?;
-        // This flag is reset at the start of next session
-        // storage.write().toggle_dirty_flag();
-        println!("Data saved successfully.");
+        println!("Complete saving data!");
     }
 
     Ok(())

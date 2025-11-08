@@ -406,9 +406,9 @@ pub struct LockedStorage {
 }
 
 /// Serializable version of storage for disk persistence.
-/// Used internally during save/load operations.
-#[derive(Serialize, Deserialize)]
-struct UnlockedStorage {
+/// Uses internally during save operations.
+#[derive(Default, Serialize, Deserialize)]
+struct SerializableStorage {
     store: HashMap<String, StorageEntry>,
     options: StorageOptions,
     stats: NonAtomicStats,
@@ -441,6 +441,7 @@ impl LockedStorage {
         let old_options = self.options;
         let _old_storage = std::mem::take(self);
         self.options = old_options;
+        self.is_dirty.store(true, Ordering::Relaxed);
     }
 
     /// Retrieves an entry by key, updating access statistics and metadata.
@@ -623,6 +624,7 @@ impl LockedStorage {
     pub fn remove_entry(&mut self, key: &str) {
         if self.store.write().remove_entry(key).is_some() {
             self.stats.total_entries.fetch_sub(1, Ordering::Relaxed);
+            self.is_dirty.store(true, Ordering::Relaxed);
         }
     }
 
@@ -691,7 +693,7 @@ impl LockedStorage {
         }
         self.store.write().insert(key, entry);
         self.stats.total_entries.fetch_add(1, Ordering::Relaxed);
-        self.is_dirty.fetch_and(true, Ordering::Relaxed);
+        self.is_dirty.store(true, Ordering::Relaxed);
         self.entry_count.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
@@ -794,7 +796,7 @@ impl LockedStorage {
         self.stats
             .total_entries
             .store(current_count, Ordering::Release);
-        self.is_dirty.fetch_and(true, Ordering::Relaxed);
+        self.is_dirty.store(true, Ordering::Relaxed);
     }
 
     /// Performs eviction based on the configured eviction policy.
@@ -985,6 +987,7 @@ impl LockedStorage {
     pub fn load_from_disk(&mut self, path: &PathBuf) -> anyhow::Result<()> {
         let path = Path::new(path);
         if !path.exists() {
+            File::create(path)?;
             return Ok(()); // No existing data to load
         }
 
@@ -992,26 +995,24 @@ impl LockedStorage {
         let mut reader = BufReader::new(file);
 
         // Deserialize the storage data
-        let unlocked_storage: UnlockedStorage =
-            bincode2::deserialize_from(&mut reader).context("deserialize from buffer")?;
+        let loaded_storage: SerializableStorage = bincode2::deserialize_from(&mut reader)
+            .context("deserialize from buffer")
+            .unwrap_or_default();
 
         // Convert non-atomic stats back to atomic
         let stats = StorageStats {
-            total_entries: AtomicUsize::new(unlocked_storage.stats.total_entries),
-            hits: AtomicUsize::new(unlocked_storage.stats.hits),
-            misses: AtomicUsize::new(unlocked_storage.stats.misses),
-            evictions: AtomicUsize::new(unlocked_storage.stats.evictions),
-            expired_removals: AtomicUsize::new(unlocked_storage.stats.expired_removals),
+            total_entries: AtomicUsize::new(loaded_storage.stats.total_entries),
+            hits: AtomicUsize::new(loaded_storage.stats.hits),
+            misses: AtomicUsize::new(loaded_storage.stats.misses),
+            evictions: AtomicUsize::new(loaded_storage.stats.evictions),
+            expired_removals: AtomicUsize::new(loaded_storage.stats.expired_removals),
         };
 
         // Replace current storage with loaded data
-        let _ = std::mem::replace(
-            &mut self.store,
-            Arc::new(RwLock::new(unlocked_storage.store)),
-        );
+        let _ = std::mem::replace(&mut self.store, Arc::new(RwLock::new(loaded_storage.store)));
         let _ = std::mem::replace(&mut self.stats, stats);
-        let _ = std::mem::replace(&mut self.options, unlocked_storage.options);
-        self.is_dirty.fetch_and(false, Ordering::Relaxed);
+        let _ = std::mem::replace(&mut self.options, loaded_storage.options);
+        self.is_dirty.store(false, Ordering::Relaxed);
 
         Ok(())
     }
@@ -1056,8 +1057,7 @@ impl LockedStorage {
         };
 
         // Create serializable version
-        let unlocked_storage = UnlockedStorage {
-            // FIX: Find a way to go around this clone
+        let unlocked_storage = SerializableStorage {
             store: self.store.read().clone(),
             options: self.options,
             stats,
