@@ -135,7 +135,7 @@ pub fn parse_arg(chars: &[char], pointer: &mut usize, arg_name: &str) -> Result<
                 arg_chars.push(chars[*pointer]);
                 *pointer += 1;
             }
-            return arg_chars;
+            arg_chars
         };
 
         arg_chars = until_delim(pointer, arg_chars);

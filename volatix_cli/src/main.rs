@@ -3,12 +3,17 @@ mod parse;
 mod serialize;
 mod usage;
 
-use std::io::{self, Read, Write};
+use std::env;
+use std::fs::{File, OpenOptions};
+use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream};
+use std::path::{Path, PathBuf};
 
+use anyhow::Context;
 use crossterm::{ExecutableCommand, QueueableCommand, cursor, event, terminal};
 use deserialize::{Response, deserialize_response};
 use parse::{Command, parse_line};
+use serde::{Deserialize, Serialize};
 use serialize::serialize_request;
 use usage::help;
 use volatix_core::volatix_ascii_art;
@@ -26,7 +31,7 @@ const HISTORY_CAPACITY: usize = 100;
 /// - `start`: Index of the oldest command in the buffer
 /// - `len`: Number of commands currently stored
 /// - `current_index`: Tracks the current position when navigating history
-#[derive(Default, Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 struct History {
     /// Fixed-size vector to store commands, pre-initialized with empty strings
     /// This allows constant-time access and prevents repeated memory allocations
@@ -46,18 +51,47 @@ struct History {
     current_index: Option<usize>,
 }
 
+impl Default for History {
+    fn default() -> Self {
+        Self {
+            commands: vec![String::new(); HISTORY_CAPACITY],
+            start: Default::default(),
+            len: Default::default(),
+            current_index: Default::default(),
+        }
+    }
+}
+
 impl History {
     /// Creates a new History instance with pre-allocated command storage
     ///
     /// # Behavior
     /// - Initializes a vector of `HISTORY_CAPACITY` empty strings
     /// - Sets all other fields to their default values
-    fn new() -> Self {
-        Self {
-            // Pre-allocate fixed-size vector to avoid dynamic resizing
-            commands: vec![String::new(); HISTORY_CAPACITY],
-            ..Default::default()
+    fn new(path: &PathBuf) -> anyhow::Result<Self> {
+        // Load from disk
+        if !path.exists() {
+            File::create(path)?;
+            return Ok(Self::default());
         }
+        let mut file = BufReader::new(File::open(path).unwrap());
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)?;
+        let loaded: History = bincode2::deserialize(&buf)?;
+        Ok(loaded)
+    }
+
+    fn save_to_disk(&self, path: &PathBuf) -> anyhow::Result<()> {
+        let file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)
+            .context("open db for writing")?;
+        let mut writer = BufWriter::new(file);
+        bincode2::serialize_into(&mut writer, self)?;
+
+        Ok(())
     }
 
     /// Adds a new command to the history, avoiding duplicates
@@ -411,12 +445,26 @@ fn connect_server(addr: SocketAddr) -> Result<TcpStream, String> {
     Ok(stream)
 }
 
+fn get_history_path(filename: &str) -> anyhow::Result<PathBuf> {
+    let home = match env::home_dir() {
+        Some(v) => v,
+        None => {
+            return Err(anyhow::anyhow!(
+                "Failed to get $HOME env variable".to_string()
+            ));
+        }
+    };
+
+    let home = Path::new(&home);
+    Ok(home.to_path_buf().join(filename))
+}
+
 /// Main application entry point
 /// Establishes connection, runs REPL, and handles user interaction
-fn main() -> Result<(), String> {
+fn main() -> anyhow::Result<()> {
     // Define server address (localhost:7878)
     let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 7878));
-    let mut stream = connect_server(addr)?;
+    let mut stream = connect_server(addr).map_err(|err| anyhow::anyhow!(err))?;
 
     // Display welcome message and usage hints
     println!("{art}", art = volatix_ascii_art());
@@ -425,11 +473,12 @@ fn main() -> Result<(), String> {
     println!("Use ↑/↓ arrows for command history");
     println!("Some terminal functionality is missing!");
 
-    let _guard = TerminalGuard::new().map_err(|err| err.to_string());
-
     // Initialize REPL components
     let mut buffer = [0u8; 1024 * 1024]; // 1MB buffer for server responses
-    let mut hist = History::new();
+    let history_path = &get_history_path(".volatix_history")?;
+    let mut hist = History::new(history_path)?;
+
+    let _guard = TerminalGuard::new().map_err(|err| err.to_string());
 
     // Main REPL (Read-Eval-Print Loop)
     loop {
@@ -492,7 +541,7 @@ fn main() -> Result<(), String> {
                                 eprintln!(
                                     "Could not reconnect after {MAX_ATTEMPTS} attempts. Exiting...\r"
                                 );
-                                return Err("Failed to reconnect\r".to_string());
+                                return Err(anyhow::anyhow!("Failed to reconnect\r".to_string()));
                             }
                             std::thread::sleep(std::time::Duration::from_millis(1000));
                         }
@@ -534,7 +583,7 @@ fn main() -> Result<(), String> {
         // Deserialize server response using RESP protocol
         // The server replies with a RESP type determined by the command's implementation
         // and possibly by the client's protocol version
-        let resp = deserialize_response(&buffer[..read])?;
+        let resp = deserialize_response(&buffer[..read]).map_err(|err| anyhow::anyhow!(err))?;
 
         // Display formatted response to user
         match resp {
@@ -549,16 +598,21 @@ fn main() -> Result<(), String> {
         }
     }
 
+    hist.save_to_disk(history_path)?;
+
     Ok(())
 }
 
 #[cfg(test)]
 mod test_history {
-    use crate::History;
+    use std::fs;
+
+    use crate::{History, get_history_path};
 
     #[test]
     fn test_history() {
-        let mut history = History::new();
+        let path = get_history_path(".tmp_history").unwrap();
+        let mut history = History::new(&path).unwrap();
 
         history.push("git clone".to_string());
         history.push("cd project".to_string());
@@ -570,5 +624,6 @@ mod test_history {
 
         // Navigate forwards
         assert_eq!(history.next_command(), Some(&"cd project".to_string()));
+        fs::remove_file(path).unwrap();
     }
 }

@@ -160,21 +160,20 @@ fn main() -> anyhow::Result<()> {
         handle: std::thread::spawn(move || {
             let interval = args.snapshots_interval.unwrap_or(SNAPSHOTS_INTERVAL_TIME);
             loop {
-                for _ in 0..(interval) / 10 {
+                for _ in 0..(interval) / 5 {
                     if snapshots_shutdown.load(Ordering::Relaxed) {
                         return;
                     }
-                    std::thread::sleep(Duration::from_secs(10));
+                    std::thread::sleep(Duration::from_secs(5));
                 }
 
-                if snapshots_storage.read().should_flush() {
-                    if snapshots_storage
+                if snapshots_storage.read().should_flush()
+                    && snapshots_storage
                         .read()
                         .save_to_disk(&snapshots_persistent_path)
                         .is_ok()
-                    {
-                        snapshots_storage.write().toggle_dirty_flag();
-                    }
+                {
+                    snapshots_storage.write().toggle_dirty_flag();
                 }
             }
         }),
