@@ -1,4 +1,5 @@
-# Volatix
+# Volatix 
+## Project moved to [codeberg](https://codeberg.org/juanmilkah/volatix)
 
 - ![Performance Info](images/screenshots-2025-11-02-15:41:26.png)
 - ![Performance Info](images/screenshots-2025-11-02-15:42:35.png)
